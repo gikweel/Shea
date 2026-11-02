@@ -79,13 +79,17 @@ class DecisionService:
         Authorization recorded (explicit or implicit, always audited)
               |
               v
-        Orchestrator.advance(task_id, "authorize_and_run")
+        Orchestrator.advance(task_id, "authorize_and_run", receipt_id=...)
 
     Phase 8 finding: risk_assessment, decision, authorization, and the
     authorize_and_run transition were each persisted with separate
     `with self._uow:` blocks. A crash between any two left facts
     inconsistently persisted. Now all four are in one transaction block
     so they commit or roll back together.
+
+    GAP 1: authorize_and_run lands in RUNNING, which now requires a
+    finalized receipt_id. Callers must pass receipt_id into
+    evaluate_and_authorize so it can be forwarded to the orchestrator.
     """
 
     def __init__(
@@ -132,6 +136,7 @@ class DecisionService:
         step: PlanStep | None = None,
         arguments: dict[str, Any] | None = None,
         profile_id: str = "system",
+        receipt_id: str | None = None,
     ) -> DecisionOutcome:
         verdict = self._policy.evaluate(capabilities)
 
@@ -231,7 +236,12 @@ class DecisionService:
                 task_id=task.id,
                 metadata={"explicit": authorization.explicit},
             )
-            updated_task = self._orchestrator.advance(task.id, "authorize_and_run")
+            # GAP 1: RUNNING requires a finalized receipt_id
+            updated_task = self._orchestrator.advance(
+                task.id,
+                "authorize_and_run",
+                receipt_id=receipt_id,
+            )
 
         return DecisionOutcome(
             decision=decision,
