@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 from shea.audit.recorder import AuditRecorder
@@ -130,7 +131,7 @@ class DecisionService:
         plan: Plan | None = None,
         step: PlanStep | None = None,
         arguments: dict[str, Any] | None = None,
-        profile_id: str = "system"
+        profile_id: str = "system",
     ) -> DecisionOutcome:
         verdict = self._policy.evaluate(capabilities)
 
@@ -187,6 +188,7 @@ class DecisionService:
             plan=plan,
             step=step,
             arguments=arguments,
+            profile_id=profile_id,
         )
 
         with self._uow:
@@ -249,12 +251,12 @@ class DecisionService:
         plan: Plan | None = None,
         step: PlanStep | None = None,
         arguments: dict[str, Any] | None = None,
-        profile_id: str = "system"
+        profile_id: str = "system",
     ) -> Authorization:
         resolved_plan = plan
         if resolved_plan is None and task.plan_id is not None:
             resolved_plan = self._plans.get_by_task(task.id)
-        
+
         # Compute binding hashes if plan/step/arguments are provided
         plan_hash = None
         step_hash = None
@@ -273,8 +275,8 @@ class DecisionService:
                 )
                 arguments_hash = compute_arguments_hash(resolved_args)
             nonce = generate_nonce()
-            
-        expires_at = self._clock.now() + timedelta(hours=1)    
+
+        expires_at = self._clock.now() + timedelta(hours=1)
 
         def _auth(*, granted_by: str, explicit: bool) -> Authorization:
             return Authorization(
@@ -313,3 +315,63 @@ class DecisionService:
                 metadata={"risk": decision.risk.value},
             )
         raise AuthorizationRequiredError(task.id, decision, risk_assessment)
+
+
+# ---------------------------------------------------------------------------
+# GAP 5 — Model / Core boundary enforcement
+# Principle: Model output = structured contract; core = authority for state changes.
+# ---------------------------------------------------------------------------
+MODEL_CORE_BOUNDARY = {
+    "principle": "Model output = structured contract; core = authority for state changes",
+    "enforcement": {
+        "model_cannot_directly_advance_state": True,
+        "model_output_must_have_contract_id": True,
+        "core_must_verify_receipt_before_invoke": True,
+        "model_cannot_bypass_receipt_gate": True,
+        "model_output_validated_by_decision_subsystem": True,
+    },
+    "violation_detection": [
+        "Flag any code path that calls task_advance() with model output directly",
+        "Flag any adapter.invoke() without prior receipt existence check",
+        "Flag any state change that skips the Decision subsystem",
+    ],
+    "remediation": [
+        "Route model output through Decision service first",
+        "Decision service outputs ALLOWED/DENIED/REQUIRES_AUTHORIZATION",
+        "Only then does Orchestrator advance state",
+        "Log all boundary violations as SECURITY_HALT",
+    ],
+}
+
+
+def verify_model_core_boundary(code_path: str | Path) -> list[str]:
+    """Heuristic check of a source file for model/core boundary violations.
+
+    Returns a list of violation descriptions (empty if none found).
+    Intended for use in CI or pre-commit review of new code paths.
+    """
+    path = Path(code_path)
+    if not path.is_file():
+        return [f"Path does not exist or is not a file: {path}"]
+
+    content = path.read_text(encoding="utf-8")
+    violations: list[str] = []
+
+    if "task.state = model_output" in content or "task.state = model." in content:
+        violations.append("Model directly setting task state — violates boundary")
+
+    if "adapter.invoke(receipt=None)" in content or (
+        "receipt=None" in content and "invoke" in content
+    ):
+        violations.append("Adapter invoke without receipt — violates boundary")
+
+    if "advance(" in content and "receipt" not in content.lower() and "decision" not in content.lower():
+        # Very rough; prefer routing through DecisionService
+        if "orchestrator.advance" in content or "self._orchestrator.advance" in content:
+            # DecisionService itself is allowed; flag only if this file is not decision/service
+            if "decision/service" not in str(path) and "decision\\service" not in str(path):
+                violations.append(
+                    "State advance without clear Decision-subsystem mediation"
+                )
+
+    return violations
