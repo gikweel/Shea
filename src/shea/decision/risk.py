@@ -84,3 +84,47 @@ class RiskEngine:
             explanation = "No risk factors identified."
 
         return RiskAssessmentResult(level=level, factors=factors, explanation=explanation)
+
+
+# ---------------------------------------------------------------------------
+# GAP 3 — V1 scope boundary audit
+# Call audit_v1_scope("feature_name") before implementing any new feature.
+# If it returns False, defer to V2/V3.
+# ---------------------------------------------------------------------------
+V1_BOUNDARY_LIST = frozenset(
+    {
+        "task_creation",
+        "state_transition",
+        "receipt_management",
+        "basic_transition",
+        "illegal_transition_detection",
+        "audit_logging",
+        "task_cancellation",
+        "terminal_state_enforcement",
+        "transition_validation",
+        "clock_integration",
+        # Explicitly NOT in V1 (commented for documentation):
+        # "model_inference", "model_decision", "model_authority_override",
+        # "model_invoke_adapter", "complex_risk_assessment",
+        # "unknown_outcome_protocol", "phased_deployment",
+    }
+)
+
+_V1_CORE = frozenset(
+    {
+        "task_lifecycle",
+        "state_machine",
+        "receipt_system",
+        "transition_audit",
+        "basic_risk",
+    }
+)
+
+
+def audit_v1_scope(feature_name: str) -> bool:
+    """Return True if feature is in V1 scope, False if it should wait for V2/V3."""
+    if feature_name in V1_BOUNDARY_LIST:
+        return True
+    if feature_name in _V1_CORE:
+        return True
+    return False
