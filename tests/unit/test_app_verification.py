@@ -13,6 +13,7 @@ from shea.app.verify_engine import evaluate_verification, evidence_from_adapter
 from shea.ports.clock import Clock
 from shea.ports.id_generator import IdGenerator
 from shea.ports.unit_of_work import UnitOfWork
+from tests.helper import AllowTestAuthorizationVerifier
 
 
 def test_policy_for_filesystem_write() -> None:
@@ -164,6 +165,7 @@ def test_supervisor_attaches_verification_without_repos(
         clock=clock,
         id_generator=id_generator,
         unit_of_work=unit_of_work,
+        authorization_verifier=AllowTestAuthorizationVerifier(),
     )
     result = supervisor.execute(
         ExecutionContract(

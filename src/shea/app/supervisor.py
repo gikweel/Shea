@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC
 
@@ -132,9 +133,16 @@ class ExecutionSupervisor:
                 return
         self._adapters.append(adapter)
 
-    def execute(self, contract: ExecutionContract) -> SupervisionResult:
+    def execute(
+        self,
+        contract: ExecutionContract,
+        *,
+        on_receipt_accepted: Callable[[ExecutionReceipt], None] | None = None,
+    ) -> SupervisionResult:
         self._validate(contract)
         self._verify_authorization(contract)
+        if "task_id" in contract.metadata and on_receipt_accepted is None:
+            raise ReceiptRequiredError(contract.contract_id)
         adapter = self._select_adapter(contract)
 
         idem_key = contract.metadata.get("idempotency_key")
@@ -185,8 +193,30 @@ class ExecutionSupervisor:
             if idem_key is not None and self._idempotency_repo is not None:
                 self._bind_idempotency_receipt(str(idem_key), receipt.id)
 
-        if self._receipts.get(receipt.id) is None:
+        accepted_receipt = self._receipts.get(receipt.id)
+        if accepted_receipt is None or accepted_receipt.state is not ReceiptState.ATTEMPTING:
             raise ReceiptRequiredError(contract.contract_id)
+
+        if on_receipt_accepted is not None:
+            try:
+                on_receipt_accepted(accepted_receipt)
+            except Exception as exc:
+                finalized_at = self._clock.now()
+                attempt.state = AttemptState.FINALIZED
+                attempt.finalized_at = finalized_at
+                attempt.outcome = AppOutcome.FAILURE
+                attempt.error = f"receipt acceptance callback failed: {exc}"
+                receipt.state = ReceiptState.FINALIZED
+                receipt.finalized_at = finalized_at
+                receipt.outcome = AppOutcome.FAILURE
+                with self._uow:
+                    self._attempts.save(attempt)
+                    self._receipts.save(receipt)
+                    if idem_key is not None:
+                        self._complete_idempotency(
+                            str(idem_key), receipt.id, AppOutcome.FAILURE
+                        )
+                raise
 
         # Revalidate BEFORE marking INVOKED so a failed check does not
         # leave an attempt stuck in INVOKED with no finalize.

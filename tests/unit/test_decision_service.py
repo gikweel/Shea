@@ -23,7 +23,7 @@ from shea.ports.repositories import PlanRepository
 from tests.unit.test_orchestrator import _RaisingAuditSink  # pyright: ignore[reportPrivateUsage]​
 
 
-def test_safe_action_auto_authorizes_and_advances_task(
+def test_safe_action_auto_authorizes_without_starting_before_receipt(
     decision_service: DecisionService, ready_task: Task
 ) -> None:
     outcome = decision_service.evaluate_and_authorize(
@@ -34,7 +34,7 @@ def test_safe_action_auto_authorizes_and_advances_task(
     assert outcome.authorization.granted is True
     assert outcome.authorization.explicit is False
     assert outcome.authorization.granted_by == "system"
-    assert outcome.task.state == TaskState.RUNNING
+    assert outcome.task.state == TaskState.READY
 
 
 def test_medium_risk_proceeds_with_implicit_authorization_without_ack(
@@ -52,7 +52,7 @@ def test_medium_risk_proceeds_with_implicit_authorization_without_ack(
     assert outcome.decision.risk.value == "MEDIUM"
     assert outcome.authorization.granted is True
     assert outcome.authorization.explicit is False
-    assert outcome.task.state == TaskState.RUNNING
+    assert outcome.task.state == TaskState.READY
 
 
 def test_high_risk_without_ack_blocks_and_does_not_advance_task(
@@ -72,7 +72,7 @@ def test_high_risk_without_ack_blocks_and_does_not_advance_task(
     assert unchanged.state == TaskState.READY
 
 
-def test_high_risk_with_explicit_ack_proceeds_and_advances_task(
+def test_high_risk_with_explicit_ack_authorizes_without_starting_before_receipt(
     decision_service: DecisionService, ready_task: Task
 ) -> None:
     """WARNING != DENIAL (Appendix B): a HIGH-risk action is not vetoed 
@@ -90,7 +90,7 @@ def test_high_risk_with_explicit_ack_proceeds_and_advances_task(
     assert outcome.authorization.granted is True
     assert outcome.authorization.explicit is True
     assert outcome.authorization.granted_by == "alice"
-    assert outcome.task.state == TaskState.RUNNING
+    assert outcome.task.state == TaskState.READY
 
 
 @pytest.fixture
@@ -242,7 +242,7 @@ def test_decision_service_transaction_rolls_back_on_audit_failure(
     orchestrator: Orchestrator,
 ) -> None:
     """Phase 8: DecisionService now wraps risk_assessment, decision,
-    authorization, and task advancement in one transaction. Proves that
+    authorization, and audit writes in one transaction. Proves that
     if the audit write fails mid-transaction, all the repository writes
     are rolled back too - no inconsistent persistence between decision
     facts and their audit trail.
@@ -277,6 +277,6 @@ def test_decision_service_transaction_rolls_back_on_audit_failure(
     assert risk_assessment_repository.get_by_task(ready_task.id) is None
     assert len(authorization_repository.list_by_task(ready_task.id)) == 0
 
-    # Task state must also remain unchanged (no advance happened)
+    # Task state remains READY until the supervisor accepts an execution receipt.
     unchanged = orchestrator.get_task(ready_task.id)
     assert unchanged.state == TaskState.READY

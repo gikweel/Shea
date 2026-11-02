@@ -5,15 +5,22 @@ from pathlib import Path
 
 import pytest
 
+from shea.app.enums import ReceiptState
 from shea.audit.recorder import AuditRecorder
 from shea.contracts.enums import TaskState
 from shea.contracts.models import AuditEvent
-from shea.core.orchestrator import Orchestrator, TaskNotFoundError
+from shea.core.orchestrator import (
+    ExecutionReceiptNotAcceptedError,
+    Orchestrator,
+    TaskNotFoundError,
+)
+from shea.persistence.sqlite.app_receipt_repository import SqliteAppReceiptRepository
 from shea.persistence.sqlite.task_repository import SqliteTaskRepository
 from shea.persistence.sqlite.unit_of_work import SqliteUnitOfWork
 from shea.ports.clock import Clock
 from shea.ports.id_generator import IdGenerator
 from shea.state_machine.transitions import IllegalTransitionError
+from tests.helper import persist_accepted_receipt_for_test
 
 
 def test_create_task_starts_in_created_state(orchestrator: Orchestrator) -> None:
@@ -38,7 +45,12 @@ def test_get_missing_task_raises(orchestrator: Orchestrator) -> None:
         orchestrator.get_task("does-not-exist")
 
 
-def test_advance_happy_path_to_completed(orchestrator: Orchestrator) -> None:
+def test_advance_happy_path_to_completed(
+    orchestrator: Orchestrator,
+    app_receipt_repository: SqliteAppReceiptRepository,
+    clock: Clock,
+    id_generator: IdGenerator,
+) -> None:
     task = orchestrator.create_task(session_id="session-1", request_id="req-1")
 
     task = orchestrator.advance(task.id, "start_planning")
@@ -47,7 +59,10 @@ def test_advance_happy_path_to_completed(orchestrator: Orchestrator) -> None:
     task = orchestrator.advance(task.id, "plan_ready")
     assert task.state == TaskState.READY
 
-    task = orchestrator.advance(task.id, "authorize_and_run")
+    receipt_id = persist_accepted_receipt_for_test(
+        app_receipt_repository, task, clock, id_generator
+    )
+    task = orchestrator.advance(task.id, "authorize_and_run", receipt_id=receipt_id)
     assert task.state == TaskState.RUNNING
 
     task = orchestrator.advance(task.id, "execution_complete")
@@ -85,6 +100,41 @@ def test_illegal_transition_is_still_audited(
     assert len(rows) == 1
     assert rows[0]["result"] == "illegal_transition"
     assert rows[0]["action"] == "authorize_and_run"
+
+
+def test_running_transition_requires_a_supervisor_accepted_receipt(
+    orchestrator: Orchestrator, ready_task
+) -> None:
+    with pytest.raises(ExecutionReceiptNotAcceptedError):
+        orchestrator.advance(ready_task.id, "authorize_and_run", receipt_id="missing")
+
+    assert orchestrator.get_task(ready_task.id).state is TaskState.READY
+
+
+@pytest.mark.parametrize("invalid_reason", ["wrong_task", "finalized"])
+def test_running_transition_rejects_receipts_not_accepted_for_this_task(
+    invalid_reason: str,
+    orchestrator: Orchestrator,
+    ready_task,
+    app_receipt_repository: SqliteAppReceiptRepository,
+    clock: Clock,
+    id_generator: IdGenerator,
+) -> None:
+    receipt_id = persist_accepted_receipt_for_test(
+        app_receipt_repository, ready_task, clock, id_generator
+    )
+    receipt = app_receipt_repository.get(receipt_id)
+    assert receipt is not None
+    if invalid_reason == "wrong_task":
+        receipt.metadata["task_id"] = "another-task"
+    else:
+        receipt.state = ReceiptState.FINALIZED
+    app_receipt_repository.save(receipt)
+
+    with pytest.raises(ExecutionReceiptNotAcceptedError):
+        orchestrator.advance(ready_task.id, "authorize_and_run", receipt_id=receipt_id)
+
+    assert orchestrator.get_task(ready_task.id).state is TaskState.READY
 
 
 def test_successful_transition_is_audited(

@@ -2,34 +2,28 @@ from __future__ import annotations
 
 import logging
 import os
-from _collections_abc import Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from shea.audio.activation import ActivationController
-from shea.audio.adapters.ingress import DummyWhisperTranscriber, SubprocessAudioSource
-from shea.audio.ports import AudioSource, AudioTranscriber, WakeWordDetector
-from shea.bootstrap import SheaRuntime
+from shea.audio.adapters import VoskTranscriber, get_default_audio_synthesizer
+from shea.audio.adapters.ingress import MicrophoneAudioSource
+from shea.audio.ports import (
+    AudioSource,
+    AudioSynthesizer,
+    AudioTranscriber,
+    WakeWordDetector,
+)
+from shea.contracts.enums import TaskState
+
+if TYPE_CHECKING:
+    from shea.bootstrap import SheaRuntime
 
 logger = logging.getLogger(__name__)
 
 
-class KeyboardWakeWordDetector(WakeWordDetector):
-    def __init__(self, trigger_word: str = "hey shea"):
-        self.trigger = trigger_word
-
-    def listen_for_wake_word(self) -> bool:
-        print(
-            f"\n[Audio] Listening for wake word ('{self.trigger}')... "
-            "(Press Enter to simulate wake)"
-        )
-        input()
-        return True
-
-
 class AudioInteractionService:
-    """The main loop for audio interaction.
-    
-    Coordinates wake-word detection, recording, transcription, and intent broadcasting.
-    """
+    """Runs the offline voice input → interaction → speech output loop."""
 
     def __init__(
         self,
@@ -37,53 +31,61 @@ class AudioInteractionService:
         detector: WakeWordDetector | None = None,
         source: AudioSource | None = None,
         transcriber: AudioTranscriber | None = None,
-    ):
+        synthesizer: AudioSynthesizer | None = None,
+        wake_word: str | None = None,
+    ) -> None:
         self.runtime = runtime
-        self.detector = detector or KeyboardWakeWordDetector()
-        self.source = source or SubprocessAudioSource()
-        self.transcriber = transcriber or DummyWhisperTranscriber()
+        self.detector = detector
+        self.source = source if source is not None else MicrophoneAudioSource()
+        self.transcriber = transcriber if transcriber is not None else VoskTranscriber()
+        self.synthesizer = (
+            synthesizer if synthesizer is not None else get_default_audio_synthesizer()
+        )
+        self.wake_word = (
+            wake_word if wake_word is not None else os.environ.get("SHEA_WAKE_WORD", "hey shea")
+        )
 
     def start_loop(self) -> None:
-        """Starts the infinite listen/transcribe/dispatch loop."""
-        logger.info("AudioInteractionService loop started.")
+        """Listen for utterances until interrupted; only dispatch wake-word matches."""
+        logger.info("Offline audio interaction loop started.")
         try:
             while True:
-                # 1. Block until wake word
-                if self.detector.listen_for_wake_word():
-                    logger.info("Wake word detected!")
-                    
-                    # 2. Record until silence
-                    audio_buffer = self.source.record_until_silence()
-                    
-                    # 3. Transcribe
-                    text = self.transcriber.transcribe(audio_buffer)
-                    if not text.strip():
-                        continue
-                        
-                    logger.info(f"Transcribed: {text}")
-                    
-                    # 4. Process Request
-                    # Follows the unified pipeline: Text -> Intent -> Plan -> Execute
-                    # Note: currently mocked transcription will not yield a real plan, 
-                    # but the pipeline handles it safely.
-                    try:
-                        self.runtime.interaction_service.handle_text(
-                            text=text,
-                            session_id="audio_session",
-                            actor="local_user",
-                            explicit_user_ack=False, # Audio is usually hands-free
-                        )
-                    except Exception as e:
-                        logger.error(f"Failed to process audio request: {e}")
-                    
+                if self.detector is not None and not self.detector.listen_for_wake_word():
+                    continue
+                self.listen_and_dispatch(self._handle_intent)
         except KeyboardInterrupt:
             logger.info("Audio loop terminated by user.")
 
-    def listen_and_dispatch(self, on_intent: Callable[[str], None]) -> str | None:
-        ctrl = ActivationController(
+    def listen_and_dispatch(self, on_intent: Callable[[str], str | None]) -> str | None:
+        controller = ActivationController(
             source=self.source,
             transcriber=self.transcriber,
             on_intent=on_intent,
-            wake_word=os.environ.get("SHEA_WAKE_WORD"),
+            synthesizer=self.synthesizer,
+            wake_word=self.wake_word,
         )
-        return ctrl.run_once()
+        return controller.run_once()
+
+    def _handle_intent(self, text: str) -> str | None:
+        result = self.runtime.interaction_service.handle_text(
+            text=text,
+            session_id="audio_session",
+            actor="local_user",
+            explicit_user_ack=False,
+        )
+
+        if result.message:
+            reply = result.message
+        elif result.error == "authorization_required":
+            reply = "I need your confirmation before I can do that."
+        elif result.error:
+            logger.error("Audio request failed: %s", result.error)
+            reply = "I couldn't complete that request."
+        elif result.task is not None and result.task.state is TaskState.COMPLETED:
+            reply = "Done."
+        elif result.task is not None:
+            reply = f"Your request finished with status {result.task.state.value}."
+        else:
+            return None
+
+        return reply

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from shea.app.adapters.tool_executor import ToolExecutorAdapter
-from shea.app.contracts import ExecutionContract
+from shea.app.contracts import ExecutionContract, ExecutionReceipt
 from shea.app.identities import (
     IdentityAssurance,
 )
@@ -56,20 +56,18 @@ class TaskNotRunningError(Exception):
         self.task_id = task_id
         self.actual_state = actual_state
         super().__init__(
-            f"Task {task_id!r} is not RUNNING (currently {actual_state.value!r}); "
-            "execution can only start from RUNNING, reached via DecisionService."
+            f"Task {task_id!r} is not READY (currently {actual_state.value!r}); "
+            "execution can only start after authorization and before receipt acceptance."
         )
 
 
 class MissingDecisionError(Exception):
-    """Raised if a task reached RUNNING without a persisted Decision.
+    """Raised if a task reaches execution without a persisted Decision.
 
-    This should be structurally impossible given the current pipeline —
-    only DecisionService can transition a task into RUNNING, and it
-    always persists a Decision first — but ExecutionService checks
-    anyway rather than trusting that invariant silently, per research doc
-    Section 15.27's determinism requirement for security-sensitive
-    components.
+    DecisionService persists a Decision before execution, but
+    ExecutionService checks instead of trusting that invariant silently,
+    per research doc Section 15.27's determinism requirement for
+    security-sensitive components.
     """
 
     def __init__(self, task_id: str) -> None:
@@ -146,6 +144,9 @@ class ExecutionService:
     here reflects what was actually authorized, not what someone claims
     was authorized.
 
+    It receives a READY task and does not transition it to RUNNING until
+    the supervisor has accepted a durable execution receipt.
+
     Also computes an `IdempotencyKeyGenerator` key from (task, tool,
     action, arguments) before every attempt and checks it against prior
     `ToolExecutionRecord`s. A prior SUCCESS or UNKNOWN for the same key
@@ -219,14 +220,9 @@ class ExecutionService:
 
     def execute(self, task: Task, request: ToolRequest) -> ExecutionOutcomeRecord:
         start_time = time.perf_counter()
-        if task.state is not TaskState.RUNNING:
+        if task.state is not TaskState.READY:
             raise TaskNotRunningError(task.id, task.state)
 
-        # Raises SecurityViolationError and drives the task to
-        # SECURITY_HALT itself on a violation; nothing further to do here
-        # on that path except let the exception propagate. Unconditional
-        # — there is no flag or default that skips this call.
-        self._security.enforce(task, request)
         self._verify_authorization_binding(task, request)
 
         # Same logical operation (task/tool/action/arguments) always
@@ -351,7 +347,21 @@ class ExecutionService:
             },
         )
 
-        supervision = self._execution_supervisor.execute(contract)
+        def accept_receipt(receipt: ExecutionReceipt) -> None:
+            nonlocal task
+            task = self._orchestrator.advance(
+                task.id,
+                "authorize_and_run",
+                receipt_id=receipt.id,
+            )
+            # Security enforcement remains a hard gate, but now follows
+            # durable receipt acceptance and still precedes adapter invocation.
+            self._security.enforce(task, request)
+
+        supervision = self._execution_supervisor.execute(
+            contract,
+            on_receipt_accepted=accept_receipt,
+        )
         raw_evidence = supervision.adapter_result.evidence or {}
         # ToolExecutorAdapter puts handler payload under "data"; native adapters may not
         evidence_data = raw_evidence.get("data", raw_evidence)

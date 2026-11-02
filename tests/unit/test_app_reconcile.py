@@ -18,6 +18,7 @@ from shea.persistence.sqlite.migrator import run_migrations
 from shea.ports.clock import Clock
 from shea.ports.id_generator import IdGenerator
 from shea.ports.unit_of_work import UnitOfWork
+from tests.helper import AllowTestAuthorizationVerifier
 
 
 def test_reconcile_invoked_not_finalized_becomes_unknown(
@@ -41,6 +42,7 @@ def test_reconcile_invoked_not_finalized_becomes_unknown(
         id_generator=id_generator,
         unit_of_work=unit_of_work,
         recovery_repository=recovery_repo,
+        authorization_verifier=AllowTestAuthorizationVerifier(),
     )
 
     now = clock.now()
@@ -97,6 +99,7 @@ def test_reconcile_already_finalized_is_noop(
         clock=clock,
         id_generator=id_generator,
         unit_of_work=unit_of_work,
+        authorization_verifier=AllowTestAuthorizationVerifier(),
     )
     # Happy path finalize
     done = supervisor.execute(

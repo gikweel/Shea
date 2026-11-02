@@ -15,6 +15,7 @@ from shea.app.supervisor import ExecutionSupervisor
 from shea.ports.clock import Clock
 from shea.ports.id_generator import IdGenerator
 from shea.ports.unit_of_work import UnitOfWork
+from tests.helper import AllowTestAuthorizationVerifier
 
 
 class InMemoryIdempotencyRepo:
@@ -55,6 +56,7 @@ def test_idempotency_in_progress_blocks_concurrent_key(
         id_generator=id_generator,
         unit_of_work=unit_of_work,
         idempotency_repository=repo,  # type: ignore[arg-type]
+        authorization_verifier=AllowTestAuthorizationVerifier(),
     )
     with pytest.raises(ContractValidationError, match="in progress"):
         supervisor.execute(

@@ -12,6 +12,7 @@ from shea.persistence.sqlite.migrator import run_migrations
 from shea.persistence.sqlite.unit_of_work import SqliteUnitOfWork
 from shea.ports.clock import Clock
 from shea.ports.id_generator import IdGenerator
+from tests.helper import AllowTestAuthorizationVerifier
 
 
 def test_supervisor_round_trip_sqlite(
@@ -31,6 +32,7 @@ def test_supervisor_round_trip_sqlite(
         clock=clock,
         id_generator=id_generator,
         unit_of_work=unit_of_work,
+        authorization_verifier=AllowTestAuthorizationVerifier(),
     )
 
     contract = ExecutionContract(

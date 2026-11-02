@@ -49,6 +49,7 @@ Demo phrases use deterministic templates (no LLM required).
 | --- | --- |
 | `[dev]` | "pytest, hypothesis, mypy, ruff" |
 | `[browser]` | Playwright (optional engine) |
+| `[audio]` | Vosk offline speech recognition |
 
 ```bash
 pip install -e ".[browser]"
@@ -57,6 +58,26 @@ playwright install chromium   # only on supported OS (e.g. macOS 14+)
 
 On any OS without Playwright, Shea uses `browser.local` only.
 `playwright_available()` gates the engine — same source on every machine.
+
+## Offline audio
+
+Install the optional Vosk dependency and download an offline model from
+[Vosk's model catalog](https://alphacephei.com/vosk/models):
+
+```bash
+pip install -e ".[audio]"
+export SHEA_VOSK_MODEL=/path/to/vosk-model-small-en-us-0.15
+export SHEA_WAKE_WORD="hey shea"
+python -m shea listen
+```
+
+The model stays on disk and speech recognition runs locally. Microphone
+capture uses `sounddevice`, installed with the audio extra, and stops after
+silence; no separate SoX or FFmpeg executable is needed. The default speech
+output uses `say` on macOS, Speech Dispatcher or eSpeak on Linux, and Windows
+PowerShell System.Speech. On macOS, grant microphone access to the
+terminal/application. `SHEA_WAKE_WORD` is detected in each locally transcribed
+utterance; the phrase is removed before the remaining request is sent to Shea.
 
 ## Architecture
 
@@ -104,12 +125,14 @@ Composition root: `shea.bootstrap.build_runtime` → `SheaRuntime`.
 | `include_ep_process` | `False` | `process.local` |
 | `include_ep_application` | `False` | OS application adapters |
 | `include_ep_network` | `False` | `network.local` + browser adapters |
+| `include_audio` | `False` | Register the native `audio.speak` tool |
 | `register_demo_intents` | `True` | note write/read templates |
 | `register_builtins` | `True` | filesystem tools |
 
 Product text path: `runtime.interaction_service`.
 
 Boot runs `reconcile_app_plane()` for stuck EP work.
+`include_audio=True` optionally registers the native `audio.speak` tool.
 
 ```bash
 python -m shea --db PATH --workspace DIR run "…"
@@ -118,6 +141,8 @@ python -m shea --db PATH --workspace DIR run "…"
 | Env | Role |
 | --- | --- |
 | SHEA_FILESYSTEM_ROOTS | Allowed roots (pathsep-separated) |
+| SHEA_VOSK_MODEL | Path to the extracted local Vosk model directory |
+| SHEA_WAKE_WORD | Phrase that activates audio requests; removed before dispatch |
 | SHEA_MODEL_PROVIDER | `puter` , `ollama` , `ghost` , `openai` |
 | SHEA_PUTER_TOKEN / OPENAI_API_KEY / GHOST_* | Credentials |
 | SHEA_MODEL_NAME / SHEA_MODEL_BASE_URL / SHEA_MODEL_TIMEOUT | Model settings |

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from shea.app.contracts import ExecutionReceipt
-from shea.app.enums import ReceiptState
 from shea.contracts.enums import TaskState
 from shea.core.orchestrator import Orchestrator
 from shea.persistence.sqlite.app_receipt_repository import SqliteAppReceiptRepository
 from shea.ports.clock import Clock
 from shea.ports.id_generator import IdGenerator
 from shea.recovery.startup import StartupRecoveryService
+from tests.helper import persist_accepted_receipt_for_test
 
 
 def test_startup_reconciles_interrupted_receipt_into_failed_task(
@@ -20,20 +19,12 @@ def test_startup_reconciles_interrupted_receipt_into_failed_task(
     clock: Clock,
     id_generator: IdGenerator,
 ) -> None:
-    task = orchestrator.advance(ready_task.id, "authorize_and_run")
     receipt_repository = SqliteAppReceiptRepository(conn, unit_of_work=unit_of_work)
-    receipt_repository.save(
-        ExecutionReceipt(
-            id=id_generator.new_id(),
-            contract_id=id_generator.new_id(),
-            authorization_id="authorization-1",
-            capability="filesystem.write",
-            operation="tool.filesystem.write.write",
-            target="filesystem.write",
-            state=ReceiptState.ATTEMPTING,
-            created_at=clock.now(),
-            metadata={"task_id": task.id},
-        )
+    receipt_id = persist_accepted_receipt_for_test(
+        receipt_repository, ready_task, clock, id_generator
+    )
+    task = orchestrator.advance(
+        ready_task.id, "authorize_and_run", receipt_id=receipt_id
     )
 
     service = StartupRecoveryService(
@@ -44,4 +35,4 @@ def test_startup_reconciles_interrupted_receipt_into_failed_task(
     )
 
     assert service.reconcile_app_receipts() == [task.id]
-    assert orchestrator.get_task(task.id).state is TaskState.BLOCKED
+    assert orchestrator.get_task(task.id).state is TaskState.FAILED

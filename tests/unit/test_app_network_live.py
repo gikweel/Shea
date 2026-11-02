@@ -22,6 +22,7 @@ from shea.app.supervisor import ExecutionSupervisor
 from shea.ports.clock import Clock
 from shea.ports.id_generator import IdGenerator
 from shea.ports.unit_of_work import UnitOfWork
+from tests.helper import AllowTestAuthorizationVerifier
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("SHEA_LIVE_NETWORK") != "1",
@@ -51,6 +52,7 @@ def test_ep_network_get_example_com(
         clock=clock,
         id_generator=id_generator,
         unit_of_work=unit_of_work,
+        authorization_verifier=AllowTestAuthorizationVerifier(),
     )
     result = supervisor.execute(
         ExecutionContract(

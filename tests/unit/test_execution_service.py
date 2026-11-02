@@ -15,6 +15,7 @@ from shea.execution.service import (
     MissingDecisionError,
     TaskNotRunningError,
 )
+from shea.persistence.sqlite.app_receipt_repository import SqliteAppReceiptRepository
 from shea.persistence.sqlite.unit_of_work import SqliteUnitOfWork
 from shea.ports.clock import Clock
 from shea.ports.id_generator import IdGenerator
@@ -32,16 +33,17 @@ from tests.unit.test_orchestrator import _RaisingAuditSink  # pyright: ignore[re
 
 
 def test_execute_on_non_running_task_raises(
-    execution_service: ExecutionService, ready_task: Task
+    execution_service: ExecutionService, orchestrator: Orchestrator
 ) -> None:
     request = _make_request()
+    task = orchestrator.create_task(session_id="session-1", request_id="req-1")
     with pytest.raises(TaskNotRunningError):
-        execution_service.execute(ready_task, request)
+        execution_service.execute(task, request)
 
 
 def test_execute_without_decision_raises(
     execution_service: ExecutionService,
-    running_task: Task,
+    authorized_task: Task,
     unit_of_work: SqliteUnitOfWork,
     conn: sqlite3.Connection,
     tool_registry: ToolRegistry,
@@ -62,16 +64,16 @@ def test_execute_without_decision_raises(
 
     # Remove any existing decisions for this task to simulate the missing case
     with unit_of_work:
-        conn.execute("DELETE FROM decisions WHERE task_id = ?", (running_task.id,))
+        conn.execute("DELETE FROM decisions WHERE task_id = ?", (authorized_task.id,))
 
     # Now the task is RUNNING but the decision lookup won't find one
     with pytest.raises(MissingDecisionError):
-        execution_service.execute(running_task, request)
+        execution_service.execute(authorized_task, request)
 
 
 def test_execute_success_advances_task_to_verifying(
     execution_service: ExecutionService,
-    running_task: Task,
+    authorized_task: Task,
     tool_registry: ToolRegistry,
 ) -> None:
     def handler(request: ToolRequest) -> ToolResponse:
@@ -85,15 +87,47 @@ def test_execute_success_advances_task_to_verifying(
             ), handler
     )
     request = _make_request(tool="echo", action="lookup")
-    result = execution_service.execute(running_task, request)
+    result = execution_service.execute(authorized_task, request)
 
     assert result.outcome == ExecutionOutcome.SUCCESS
     assert result.task.state == TaskState.VERIFYING
 
 
+def test_supervisor_accepts_receipt_before_tool_handler_runs(
+    execution_service: ExecutionService,
+    authorized_task: Task,
+    orchestrator: Orchestrator,
+    app_receipt_repository: SqliteAppReceiptRepository,
+    tool_registry: ToolRegistry,
+) -> None:
+    def handler(request: ToolRequest) -> ToolResponse:
+        receipts = app_receipt_repository.list_unfinalized()
+        assert len(receipts) == 1
+        assert receipts[0].state.value == "ATTEMPTING"
+        assert receipts[0].metadata["task_id"] == authorized_task.id
+        assert orchestrator.get_task(authorized_task.id).state is TaskState.RUNNING
+        return ToolResponse(success=True, data={"accepted": True})
+
+    tool_registry.register(
+        ToolDeclaration(
+            name="receipt-check",
+            capabilities=frozenset({"weather.lookup"}),
+            argument_schema=MINIMAL_SCHEMA,
+        ),
+        handler,
+    )
+
+    result = execution_service.execute(
+        authorized_task,
+        _make_request(tool="receipt-check", action="run"),
+    )
+
+    assert result.outcome is ExecutionOutcome.SUCCESS
+
+
 def test_execute_failure_advances_task_to_failed(
     execution_service: ExecutionService,
-    running_task: Task,
+    authorized_task: Task,
     tool_registry: ToolRegistry,
 ) -> None:
     def handler(request: ToolRequest) -> ToolResponse:
@@ -107,7 +141,7 @@ def test_execute_failure_advances_task_to_failed(
             ), handler
     )
     request = _make_request(tool="fail", action="do_thing")
-    result = execution_service.execute(running_task, request)
+    result = execution_service.execute(authorized_task, request)
 
     assert result.outcome == ExecutionOutcome.FAILURE
     assert result.task.state == TaskState.FAILED
@@ -115,7 +149,7 @@ def test_execute_failure_advances_task_to_failed(
 
 def test_execute_unknown_outcome_advances_task_to_blocked(
     execution_service: ExecutionService,
-    running_task: Task,
+    authorized_task: Task,
     tool_registry: ToolRegistry,
 ) -> None:
     """UNKNOWN stays distinct from FAILURE end-to-end (Appendix B).
@@ -135,7 +169,7 @@ def test_execute_unknown_outcome_advances_task_to_blocked(
         unknown_handler,
     )
     request = _make_request(tool="slow", action="timeout")
-    result = execution_service.execute(running_task, request)
+    result = execution_service.execute(authorized_task, request)
 
     assert result.outcome == ExecutionOutcome.FAILURE
     assert result.task.state == TaskState.FAILED
@@ -143,7 +177,7 @@ def test_execute_unknown_outcome_advances_task_to_blocked(
 
 def test_capability_denied_is_audited(
     execution_service: ExecutionService,
-    running_task: Task,
+    authorized_task: Task,
     tool_registry: ToolRegistry,
     decision_repository: DecisionRepository,
     unit_of_work: SqliteUnitOfWork,
@@ -151,9 +185,9 @@ def test_capability_denied_is_audited(
 ) -> None:
     # Delete existing decisions for task before saving the test decision
     with unit_of_work:
-        conn.execute("DELETE FROM decisions WHERE task_id = ?", (running_task.id,))
+        conn.execute("DELETE FROM decisions WHERE task_id = ?", (authorized_task.id,))
         decision_repository.save(
-            _make_decision(running_task.id, capabilities=["weather.lookup"])
+            _make_decision(authorized_task.id, capabilities=["weather.lookup"])
         )
 
     def denied_handler(req: ToolRequest) -> ToolResponse:
@@ -170,18 +204,18 @@ def test_capability_denied_is_audited(
     request = _make_request(tool="secret", action="read")
 
     with pytest.raises(CapabilityNotAuthorizedError):
-        execution_service.execute(running_task, request)
+        execution_service.execute(authorized_task, request)
 
     rows = conn.execute(
         "SELECT * FROM audit_events WHERE task_id = ? AND event_type = ?",
-        (running_task.id, "execution.capability_denied"),
+        (authorized_task.id, "execution.capability_denied"),
     ).fetchall()
     assert len(rows) == 1
 
 
 def test_execution_record_is_persisted(
     execution_service: ExecutionService,
-    running_task: Task,
+    authorized_task: Task,
     tool_registry: ToolRegistry,
     tool_execution_repository: ToolExecutionRepository,
 ) -> None:
@@ -196,9 +230,9 @@ def test_execution_record_is_persisted(
             ), handler
     )
     request = _make_request(tool="echo", action="lookup")
-    execution_service.execute(running_task, request)
+    execution_service.execute(authorized_task, request)
 
-    records = tool_execution_repository.list_by_task(running_task.id)
+    records = tool_execution_repository.list_by_task(authorized_task.id)
     assert len(records) == 1
     assert records[0].outcome == ExecutionOutcome.SUCCESS
     assert set(records[0].metadata) == {
@@ -211,7 +245,7 @@ def test_execution_record_is_persisted(
 
 
 def test_execution_service_transaction_rolls_back_on_audit_failure(
-    running_task: Task,
+    authorized_task: Task,
     unit_of_work: SqliteUnitOfWork,
     orchestrator: Orchestrator,
     permit_authority: ExecutionPermitAuthority,
@@ -262,14 +296,14 @@ def test_execution_service_transaction_rolls_back_on_audit_failure(
     )
 
     with pytest.raises(RuntimeError, match="simulated audit sink failure"):
-        broken_service.execute(running_task, request)
+        broken_service.execute(authorized_task, request)
 
     # Execution record must have been rolled back
-    records = tool_execution_repository.list_by_task(running_task.id)
+    records = tool_execution_repository.list_by_task(authorized_task.id)
     assert len(records) == 0
 
     # Task state must also remain unchanged
-    unchanged = orchestrator.get_task(running_task.id)
+    unchanged = orchestrator.get_task(authorized_task.id)
     assert unchanged.state == TaskState.RUNNING
 
 

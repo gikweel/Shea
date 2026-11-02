@@ -28,6 +28,10 @@ dev = [
 browser = [
     "playwright>=1.40",
 ]
+audio = [
+    "vosk>=0.3.44",
+    "sounddevice>=0.5.2",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

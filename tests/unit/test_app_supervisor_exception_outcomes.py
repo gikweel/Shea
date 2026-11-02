@@ -22,6 +22,7 @@ from shea.ports.clock import Clock
 from shea.ports.id_generator import IdGenerator
 from shea.ports.unit_of_work import UnitOfWork
 from shea.security.exceptions import SecurityViolationError
+from tests.helper import AllowTestAuthorizationVerifier
 
 
 class _RaisingAdapter:
@@ -68,6 +69,7 @@ def _supervisor(
         clock=clock,
         id_generator=id_generator,
         unit_of_work=unit_of_work,
+        authorization_verifier=AllowTestAuthorizationVerifier(),
         **extra,  # type: ignore[arg-type]
     )
 

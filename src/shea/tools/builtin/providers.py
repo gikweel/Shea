@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from shea.audio.adapters import get_default_audio_synthesizer
 from shea.audio.ports import AudioSynthesizer
 from shea.security.filesystem_policy import FilesystemPolicy
 from shea.security.network_policy import NetworkPolicy
@@ -55,8 +56,10 @@ class BuiltinAudioProvider:
 
     name = "shea.builtin.audio"
 
-    def __init__(self, synthesizer: AudioSynthesizer) -> None:
-        self._synthesizer = synthesizer
+    def __init__(self, synthesizer: AudioSynthesizer | None = None) -> None:
+        self._synthesizer = (
+            synthesizer if synthesizer is not None else get_default_audio_synthesizer()
+        )
 
     def register(
         self,

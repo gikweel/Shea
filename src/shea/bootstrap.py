@@ -195,6 +195,7 @@ def build_runtime(
     include_ep_network: bool = False,
     include_ep_application: bool = False,
     include_ep_process: bool = False,
+    include_audio: bool = False,
 ) -> SheaRuntime:
     """Build the V1 runtime and reconcile unfinished app-plane work.
 
@@ -218,6 +219,7 @@ def build_runtime(
 
     task_repository = SqliteTaskRepository(conn, unit_of_work=unit_of_work)
     plan_repository = SqlitePlanRepository(conn, unit_of_work=unit_of_work)
+    receipt_repository = SqliteAppReceiptRepository(conn, unit_of_work=unit_of_work)
     audit_sink = SqliteAuditSink(conn, unit_of_work=unit_of_work)
     audit = AuditRecorder(sink=audit_sink, clock=clock, id_generator=id_generator)
     orchestrator = Orchestrator(
@@ -227,6 +229,11 @@ def build_runtime(
         id_generator=id_generator,
         unit_of_work=unit_of_work,
         task_channel=task_channel,
+        receipt_acceptance_verifier=lambda task_id, receipt_id: (
+            (receipt := receipt_repository.get(receipt_id)) is not None
+            and receipt.state.value == "ATTEMPTING"
+            and receipt.metadata.get("task_id") == task_id
+        ),
     )
     if model_provider is not None:
         provider = model_provider
@@ -277,6 +284,7 @@ def build_runtime(
             network_policy=network_policy,
             verifier_registry=verifier_registry,
             include_http_fetch=include_http_fetch,
+            include_audio=include_audio,
         )
         register_demo_intent(matcher, templates, workspace=workspace)
     permit_authority = ExecutionPermitAuthority()
@@ -318,7 +326,6 @@ def build_runtime(
         )
     )
 
-    receipt_repository = SqliteAppReceiptRepository(conn, unit_of_work=unit_of_work)
     attempt_repository = SqliteAppAttemptRepository(conn, unit_of_work=unit_of_work)
     evidence_repository = SqliteAppEvidenceRepository(conn, unit_of_work=unit_of_work)
     app_verification_repository = SqliteAppVerificationRepository(

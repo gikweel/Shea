@@ -34,6 +34,7 @@ from shea.app.supervisor import ExecutionSupervisor
 from shea.ports.clock import Clock
 from shea.ports.id_generator import IdGenerator
 from shea.ports.unit_of_work import UnitOfWork
+from tests.helper import AllowTestAuthorizationVerifier
 
 
 def test_resolve_path_canonical(tmp_path: Path) -> None:
@@ -123,6 +124,7 @@ def test_process_spawn_echo(
         clock=clock,
         id_generator=id_generator,
         unit_of_work=unit_of_work,
+        authorization_verifier=AllowTestAuthorizationVerifier(),
     )
     contract = ExecutionContract(
         contract_id="c-proc-1",

@@ -51,13 +51,9 @@ class DecisionService:
     """Coordinates the Decision/Policy/Risk pipeline described in
     technical doc Section 11 and research doc Section 4/9.
 
-    This is the ONLY subsystem in Phase 2 that is allowed to call
-    `Orchestrator.advance(task_id, "authorize_and_run")`. That is not
-    enforced by the type system (Orchestrator is a plain public class),
-    but architecturally: nothing else in this codebase should import
-    Orchestrator for that purpose. A future phase could tighten this with
-    a narrower "Authorizer" port on Orchestrator if that boundary needs to
-    be machine-checked rather than a convention.
+    DecisionService records authorization but does not start execution.
+    ExecutionService advances the task only after the supervisor has
+    persisted and accepted the execution receipt.
 
     Pipeline, matching Section 11's decision pipeline exactly:
 
@@ -79,17 +75,16 @@ class DecisionService:
         Authorization recorded (explicit or implicit, always audited)
               |
               v
-        Orchestrator.advance(task_id, "authorize_and_run", receipt_id=...)
+        ExecutionService asks the supervisor to accept a receipt, then
+        advances the task to RUNNING before the adapter is invoked.
 
-    Phase 8 finding: risk_assessment, decision, authorization, and the
-    authorize_and_run transition were each persisted with separate
-    `with self._uow:` blocks. A crash between any two left facts
-    inconsistently persisted. Now all four are in one transaction block
-    so they commit or roll back together.
+    Risk assessment, decision, authorization, and their audit records are
+    persisted in one transaction. The state transition is deliberately
+    later, after supervisor receipt acceptance.
 
-    GAP 1: authorize_and_run lands in RUNNING, which now requires a
-    finalized receipt_id. Callers must pass receipt_id into
-    evaluate_and_authorize so it can be forwarded to the orchestrator.
+    DecisionService records authority but leaves the task READY. Only after
+    the app supervisor persists an accepted receipt may ExecutionService
+    advance it to RUNNING.
     """
 
     def __init__(
@@ -136,7 +131,6 @@ class DecisionService:
         step: PlanStep | None = None,
         arguments: dict[str, Any] | None = None,
         profile_id: str = "system",
-        receipt_id: str | None = None,
     ) -> DecisionOutcome:
         verdict = self._policy.evaluate(capabilities)
 
@@ -236,18 +230,11 @@ class DecisionService:
                 task_id=task.id,
                 metadata={"explicit": authorization.explicit},
             )
-            # GAP 1: RUNNING requires a finalized receipt_id
-            updated_task = self._orchestrator.advance(
-                task.id,
-                "authorize_and_run",
-                receipt_id=receipt_id,
-            )
-
         return DecisionOutcome(
             decision=decision,
             risk_assessment=risk_assessment,
             authorization=authorization,
-            task=updated_task,
+            task=task,
         )
 
     def _resolve_authorization(

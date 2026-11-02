@@ -34,21 +34,35 @@ def main(argv: Sequence[str] | None = None) -> None:
     chat_p = sub.add_parser("chat", help="Start interactive chat session")
     chat_p.add_argument("--session", default="cli-chat")
 
+    sub.add_parser("listen", help="Start offline voice interaction")
+
     update_p = sub.add_parser("update", help="Update the system securely")
     update_p.add_argument("--channel", default="stable", help="Update channel")
 
     args = parser.parse_args(argv)
     Path(args.workspace).mkdir(parents=True, exist_ok=True)
 
-    app = SheaApp(build_runtime(
+    runtime = build_runtime(
         args.db,
         workspace=args.workspace,
         register_builtins=True,
-    ))
+    )
 
     if args.command is None or args.command == "boot":
         print("shea ready; app-plane reconcile done")
         return
+
+    if args.command == "listen":
+        from shea.audio.service import AudioInteractionService
+
+        try:
+            print("Starting offline audio interaction. Press Ctrl-C to stop.")
+            AudioInteractionService(runtime).start_loop()
+        finally:
+            runtime.conn.close()
+        return
+
+    app = SheaApp(runtime)
 
     if args.command == "update":
         from shea.system.updater import UpdateService

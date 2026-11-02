@@ -28,6 +28,7 @@ from shea.decision.pending import PendingConfirmationStore
 from shea.decision.policy import PolicyEngine
 from shea.decision.risk import RiskEngine
 from shea.decision.service import DecisionService
+from shea.execution.authorization import RecordAuthorizationVerifier
 from shea.execution.permit import ExecutionPermitAuthority
 from shea.execution.service import ExecutionService
 from shea.model.scripted import ScriptedModelProvider
@@ -68,6 +69,7 @@ from shea.tools.registry import ToolDeclaration, ToolRegistry
 from shea.understanding.deterministic import DeterministicIntentMatcher
 from shea.verification.service import VerificationService
 from shea.verification.verifier import VerifierRegistry
+from tests.helper import persist_accepted_receipt_for_test
 
 
 class FrozenClock(Clock):
@@ -163,6 +165,7 @@ def orchestrator(
     clock: FrozenClock,
     id_generator: SequentialIdGenerator,
     unit_of_work: SqliteUnitOfWork,
+    app_receipt_repository: SqliteAppReceiptRepository,
 ) -> Orchestrator:
     return Orchestrator(
         task_repository=task_repository,
@@ -170,6 +173,11 @@ def orchestrator(
         clock=clock,
         id_generator=id_generator,
         unit_of_work=unit_of_work,
+        receipt_acceptance_verifier=lambda task_id, receipt_id: (
+            (receipt := app_receipt_repository.get(receipt_id)) is not None
+            and receipt.state.value == "ATTEMPTING"
+            and receipt.metadata.get("task_id") == task_id
+        ),
     )
 
 
@@ -309,6 +317,9 @@ def execution_supervisor(
     clock: FrozenClock,
     id_generator: SequentialIdGenerator,
     network_policy: NetworkPolicy,
+    authorization_repository: SqliteAuthorizationRepository,
+    task_repository: SqliteTaskRepository,
+    plan_repository: SqlitePlanRepository,
 ) -> ExecutionSupervisor:
     receipt_repository = SqliteAppReceiptRepository(
         conn,
@@ -360,6 +371,12 @@ def execution_supervisor(
         clock=clock,
         id_generator=id_generator,
         unit_of_work=unit_of_work,
+        authorization_verifier=RecordAuthorizationVerifier(
+            authorizations=authorization_repository,
+            tasks=task_repository,
+            plans=plan_repository,
+            clock=clock,
+        ),
     )
 
 @pytest.fixture
@@ -396,10 +413,9 @@ def execution_service(
 
 
 @pytest.fixture
-def running_task(decision_service: DecisionService, ready_task: Task) -> Task:
-    """A task carried all the way to RUNNING via the real DecisionService,
-    with a SAFE-risk decision that auto-authorizes — the state
-    ExecutionService expects to receive a task in. Uses `weather.lookup`,
+def authorized_task(decision_service: DecisionService, ready_task: Task) -> Task:
+    """A READY task with a SAFE-risk decision and authorization.
+    Uses `weather.lookup`,
     which matches no capability in either default policy list, keeping
     this fixture's authorized-capabilities set deliberately empty so
     tests can control exactly what gets authorized.
@@ -408,6 +424,25 @@ def running_task(decision_service: DecisionService, ready_task: Task) -> Task:
         ready_task, capabilities=frozenset({"weather.lookup"})
     )
     return outcome.task
+
+
+@pytest.fixture
+def running_task(
+    authorized_task: Task,
+    orchestrator: Orchestrator,
+    app_receipt_repository: SqliteAppReceiptRepository,
+    clock: FrozenClock,
+    id_generator: SequentialIdGenerator,
+) -> Task:
+    """A task transitioned after its test receipt was accepted."""
+    receipt_id = persist_accepted_receipt_for_test(
+        app_receipt_repository, authorized_task, clock, id_generator
+    )
+    return orchestrator.advance(
+        authorized_task.id,
+        "authorize_and_run",
+        receipt_id=receipt_id,
+    )
 
 
 @pytest.fixture
@@ -481,7 +516,7 @@ def recovery_service(
 
 @pytest.fixture
 def verifying_task(
-    execution_service: ExecutionService, running_task: Task, tool_registry: ToolRegistry
+    execution_service: ExecutionService, authorized_task: Task, tool_registry: ToolRegistry
 ) -> Task:
     """A task carried through to VERIFYING via a real, successful
     execution — the state VerificationService expects to receive one in.
@@ -494,13 +529,13 @@ def verifying_task(
         ToolDeclaration(name="echo", capabilities=frozenset({"weather.lookup"})), handler
     )
     request = ToolRequest(request_id="req-1", tool="echo", action="lookup")
-    result = execution_service.execute(running_task, request)
+    result = execution_service.execute(authorized_task, request)
     return result.task
 
 
 @pytest.fixture
 def failed_task(
-    execution_service: ExecutionService, running_task: Task, tool_registry: ToolRegistry
+    execution_service: ExecutionService, authorized_task: Task, tool_registry: ToolRegistry
 ) -> Task:
     """A task carried through to FAILED via a real, failing execution —
     the state RecoveryService.begin_recovery expects to receive one in.
@@ -513,7 +548,7 @@ def failed_task(
         ToolDeclaration(name="fail", capabilities=frozenset({"weather.lookup"})), handler
     )
     request = ToolRequest(request_id="req-1", tool="fail", action="do_thing")
-    result = execution_service.execute(running_task, request)
+    result = execution_service.execute(authorized_task, request)
     return result.task
 
 

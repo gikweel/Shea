@@ -10,10 +10,13 @@ from shea.contracts.enums import RiskLevel
 DEFAULT_ELEVATED_PRIVILEGE_CAPABILITIES: frozenset[str] = frozenset(
     {
         "process.execute",
+        "process.terminate",
         "filesystem.write",
+        "filesystem.read",
         "credential.access",
         "system.configure",
         "network.listen",
+        "network.connect",
     }
 )
 DEFAULT_NETWORK_CAPABILITIES: frozenset[str] = frozenset({"network.connect", "network.outbound"})

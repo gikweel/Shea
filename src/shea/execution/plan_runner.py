@@ -38,7 +38,7 @@ class PlanRunner:
     """Execute a plan step-by-step with per-step authorization binding.
 
     For each pending step (in order):
-      READY  --authorize_and_run(bound to this step)--> RUNNING
+      READY  --supervisor accepts receipt--> RUNNING
            --execute--> VERIFYING
            --verify(more_steps=...)--> READY | COMPLETED | FAILED
 

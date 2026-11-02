@@ -60,6 +60,9 @@ def wired() -> tuple[EventBus, Orchestrator, SecurityService]:
         id_generator=ids,
         unit_of_work=uow,
         task_channel=task_channel,
+        receipt_acceptance_verifier=lambda task_id, receipt_id: (
+            receipt_id == f"accepted:{task_id}"
+        ),
     )
     security_service = SecurityService(
         gate=SecurityGate(
@@ -153,7 +156,9 @@ class TestSecurityServiceEvents:
         task = orchestrator.create_task(session_id="s1", request_id="r1")
         orchestrator.advance(task.id, "start_planning")
         orchestrator.advance(task.id, "plan_ready")
-        orchestrator.advance(task.id, "authorize_and_run")
+        orchestrator.advance(
+            task.id, "authorize_and_run", receipt_id=f"accepted:{task.id}"
+        )
         task = orchestrator.get_task(task.id)
 
         # Try to access a private IP (SSRF)
@@ -183,7 +188,9 @@ class TestSecurityServiceEvents:
         task = orchestrator.create_task(session_id="s1", request_id="r1")
         orchestrator.advance(task.id, "start_planning")
         orchestrator.advance(task.id, "plan_ready")
-        orchestrator.advance(task.id, "authorize_and_run")
+        orchestrator.advance(
+            task.id, "authorize_and_run", receipt_id=f"accepted:{task.id}"
+        )
         task = orchestrator.get_task(task.id)
 
         # A safe request

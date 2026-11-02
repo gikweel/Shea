@@ -15,6 +15,7 @@ from shea.app.memory import (
     InMemoryReceiptRepository,
 )
 from shea.app.supervisor import ExecutionSupervisor
+from tests.helper import AllowTestAuthorizationVerifier
 
 
 class _Clock:
@@ -49,6 +50,7 @@ def test_supervisor_persists_receipt_before_success() -> None:
         clock=_Clock(),  # type: ignore[arg-type]
         id_generator=_Ids(),  # type: ignore[arg-type]
         unit_of_work=_Uow(),  # type: ignore[arg-type]
+        authorization_verifier=AllowTestAuthorizationVerifier(),
     )
     contract = ExecutionContract(
         contract_id="c1",
@@ -104,6 +106,7 @@ def test_supervisor_finalizes_receipt_and_attempt_when_adapter_raises_unexpected
         clock=_Clock(),  # type: ignore[arg-type]
         id_generator=_Ids(),  # type: ignore[arg-type]
         unit_of_work=_Uow(),  # type: ignore[arg-type]
+        authorization_verifier=AllowTestAuthorizationVerifier(),
     )
     contract = ExecutionContract(
         contract_id="c1",

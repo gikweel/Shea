@@ -19,6 +19,7 @@ from shea.persistence.sqlite.migrator import run_migrations
 from shea.ports.clock import Clock
 from shea.ports.id_generator import IdGenerator
 from shea.ports.unit_of_work import UnitOfWork
+from tests.helper import AllowTestAuthorizationVerifier
 
 
 def test_phase4_persists_evidence_and_verification(
@@ -44,6 +45,7 @@ def test_phase4_persists_evidence_and_verification(
         clock=clock,
         id_generator=id_generator,
         unit_of_work=unit_of_work,
+        authorization_verifier=AllowTestAuthorizationVerifier(),
         evidence_repository=evidence_repo,
         verification_repository=verification_repo,
     )
@@ -91,6 +93,7 @@ def test_idempotency_blocks_second_execute(
         clock=clock,
         id_generator=id_generator,
         unit_of_work=unit_of_work,
+        authorization_verifier=AllowTestAuthorizationVerifier(),
         idempotency_repository=idem_repo,
     )
     contract = ExecutionContract(

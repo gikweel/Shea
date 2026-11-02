@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from shea.audit.recorder import AuditRecorder
@@ -19,6 +20,16 @@ class TaskNotFoundError(Exception):
     def __init__(self, task_id: str) -> None:
         self.task_id = task_id
         super().__init__(f"No task found with id {task_id!r}")
+
+
+class ExecutionReceiptNotAcceptedError(Exception):
+    def __init__(self, task_id: str, receipt_id: str | None) -> None:
+        self.task_id = task_id
+        self.receipt_id = receipt_id
+        super().__init__(
+            f"Task {task_id!r} cannot enter RUNNING without a supervisor-accepted "
+            f"execution receipt; received {receipt_id!r}."
+        )
 
 
 class Orchestrator:
@@ -51,6 +62,7 @@ class Orchestrator:
         *,
         unit_of_work: UnitOfWork,
         task_channel: TaskChannel | None = None,
+        receipt_acceptance_verifier: Callable[[str, str], bool] | None = None,
     ) -> None:
         self._tasks = task_repository
         self._audit = audit
@@ -58,6 +70,7 @@ class Orchestrator:
         self._ids = id_generator
         self._uow = unit_of_work
         self._events = task_channel
+        self._receipt_acceptance_verifier = receipt_acceptance_verifier
 
     def create_task(
         self,
@@ -111,11 +124,9 @@ class Orchestrator:
         fact (something tried to move a task somewhere it wasn't allowed
         to go), not just an error to swallow.
 
-        GAP 1 (Receipt-before-RUNNING, tightened):
-        Any transition that lands in RUNNING requires a non-None
-        receipt_id. If the task repository exposes get_receipt, the
-        receipt must also exist and be in FINALIZED state. Callers that
-        reach RUNNING (notably authorize_and_run) must supply the receipt.
+        Entering RUNNING requires a receipt that the app supervisor has
+        durably accepted. The verifier checks the persisted receipt before
+        any task state change is written.
         """
         task = self.get_task(task_id)
 
@@ -134,29 +145,25 @@ class Orchestrator:
             )
             raise exc
 
-        # GAP 1 — Receipt-before-RUNNING gate (hard requirement)
-        if new_state == TaskState.RUNNING:
-            if not receipt_id:
-                raise ValueError(
-                    "Receipt must be provided and finalized before task can "
-                    "transition to RUNNING (receipt_id is required)."
-                )
-            get_receipt = getattr(self._tasks, "get_receipt", None)
-            if callable(get_receipt):
-                receipt = get_receipt(receipt_id)
-                # ReceiptState.FINALIZED lives in shea.app.enums; compare by value
-                # so core does not hard-depend on the app plane at import time.
-                receipt_state = getattr(receipt, "state", None)
-                state_value = (
-                    str(getattr(receipt_state, "value", receipt_state))
-                    if receipt_state is not None
-                    else None
-                )
-                if receipt is None or state_value != "FINALIZED":
-                    raise ValueError(
-                        f"Receipt {receipt_id} must be finalized before task can "
-                        f"transition to RUNNING. Current receipt state: {state_value or 'none'}"
-                    )
+        if new_state is TaskState.RUNNING and (
+            receipt_id is None
+            or self._receipt_acceptance_verifier is None
+            or not self._receipt_acceptance_verifier(task.id, receipt_id)
+        ):
+            self._audit.record(
+                actor="orchestrator",
+                component="core.orchestrator",
+                event_type="task.transition.rejected",
+                action=event,
+                result="receipt_not_accepted",
+                request_id=task.request_id,
+                task_id=task.id,
+                metadata={
+                    "from_state": task.state.value,
+                    "receipt_id": receipt_id,
+                },
+            )
+            raise ExecutionReceiptNotAcceptedError(task.id, receipt_id)
 
         from_state = task.state
         task.state = new_state
