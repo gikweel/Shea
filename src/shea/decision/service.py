@@ -321,7 +321,7 @@ class DecisionService:
 # GAP 5 — Model / Core boundary enforcement
 # Principle: Model output = structured contract; core = authority for state changes.
 # ---------------------------------------------------------------------------
-MODEL_CORE_BOUNDARY = {
+MODEL_CORE_BOUNDARY: dict[str, object] = {
     "principle": "Model output = structured contract; core = authority for state changes",
     "enforcement": {
         "model_cannot_directly_advance_state": True,

@@ -145,9 +145,7 @@ class Orchestrator:
                 # so core does not hard-depend on the app plane at import time.
                 receipt_state = getattr(receipt, "state", None)
                 state_value = (
-                    receipt_state.value
-                    if hasattr(receipt_state, "value")
-                    else str(receipt_state)
+                    str(getattr(receipt_state, "value", receipt_state))
                     if receipt_state is not None
                     else None
                 )
