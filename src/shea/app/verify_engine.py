@@ -30,7 +30,7 @@ def evidence_from_adapter(
     observed_at: datetime,
 ) -> EvidenceRecord:
     kind = evidence_kind_for_operation(operation)
-    payload: dict[str,Any] = {
+    payload: dict[str, Any] = {
         "outcome": result.outcome.value,
         "error": result.error,
         **dict(result.evidence),
@@ -123,7 +123,8 @@ def evaluate_verification(
             ):
                 continue
         if required == "absent" and (
-            post == "absent" or evidence.payload.get("deleted") is True
+            post == "absent"
+            or evidence.payload.get("deleted") is True
             or evidence.payload.get("note") == "already absent"
         ):
             continue
@@ -131,9 +132,7 @@ def evaluate_verification(
             continue
         if required == "source_and_destination_exist" and post == "source_and_destination_exist":
             continue
-        if required == (
-            "source_absent_destination_exists" and post == "source_absent_destination_exists"
-            ):
+        if required == "source_absent_destination_exists" and post == "source_absent_destination_exists":
             continue
 
         # Required postcondition not satisfied
@@ -166,3 +165,32 @@ def evaluate_verification(
         explanation="; ".join(explanation_parts),
         verified_at=verified_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# GAP 2 — Concrete UNKNOWN outcome protocol
+# Reference this whenever outcome == AppOutcome.UNKNOWN.
+# ---------------------------------------------------------------------------
+UNKNOWN_PROTOCOL = {
+    "triggers": [
+        "Side effect initiated but connection dropped before result received",
+        "Adapter returned no outcome field",
+        "Timeout waiting for adapter response without explicit FAILURE",
+        "Partial side effect observed but completeness uncertain",
+        "External system acknowledged intent but returned ambiguous status",
+    ],
+    "must_not_do": [
+        "Never collapse UNKNOWN into FAILURE for non-idempotent actions",
+        "Never invent certainty — UNKNOWN means still unknowable",
+        "Never retry without re-verifying the original side effect status",
+        "Never route UNKNOWN straight to FAILED — route to BLOCKED instead",
+        "Never use UNKNOWN as a shortcut for 'we don't know what happened'",
+    ],
+    "recovery_steps": [
+        "Route to BLOCKED state (needs investigation)",
+        "Attempt re-verification with different evidence",
+        "If idempotent: may retry with exponential backoff",
+        "If non-idempotent: require explicit user acknowledgement",
+        "Log as UNKNOWN_OUTCOME in audit records",
+    ],
+}
