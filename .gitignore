@@ -11,6 +11,10 @@ __pycache__/
 .github/
 *.egg-info/
 *.db
+/snapshots/
+/build
+/dist
+/packaging
 *.code-workspace
 *.log
 .shea_logs.json

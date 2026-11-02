@@ -56,6 +56,7 @@ from shea.memory.extractor import MemoryExtractor
 from shea.memory.lifecycle.expiration import MemoryLifecycleEnforcer
 from shea.memory.retrieval.ranking import BoundedContextAssembler, HybridMemoryRetriever
 from shea.memory.service import MemoryService
+from shea.model.settings import ModelSettingsService, SwitchableModelProvider
 from shea.persistence.sqlite.app_attempt_repository import SqliteAppAttemptRepository
 from shea.persistence.sqlite.app_evidence_repository import SqliteAppEvidenceRepository
 from shea.persistence.sqlite.app_idempotency_repository import SqliteAppIdempotencyRepository
@@ -72,6 +73,9 @@ from shea.persistence.sqlite.memory_repository import SqliteMemoryRepository
 from shea.persistence.sqlite.migrator import run_migrations
 from shea.persistence.sqlite.plan_repository import SqlitePlanRepository
 from shea.persistence.sqlite.recovery_attempt_repository import SqliteRecoveryAttemptRepository
+from shea.persistence.sqlite.recovery_checkpoint_repository import (
+    SqliteRecoveryCheckpointRepository,
+)
 from shea.persistence.sqlite.request_repository import SqliteRequestRepository
 from shea.persistence.sqlite.risk_repository import SqliteRiskAssessmentRepository
 from shea.persistence.sqlite.session_repository import SqliteSessionRepository
@@ -86,6 +90,7 @@ from shea.planning.templates import PlanTemplateRegistry
 from shea.ports.execution_boundary import ExecutionBoundary
 from shea.ports.model_provider import ModelProvider
 from shea.profiles.service import ProfileService
+from shea.recovery.checkpoint import RecoveryCheckpointService
 from shea.recovery.service import RecoveryService
 from shea.security.filesystem_policy import FilesystemPolicy
 from shea.security.gate import SecurityGate
@@ -120,6 +125,7 @@ class SheaRuntime:
     planning_service: PlanningService
     plan_runner: PlanRunner
     recovery_service: RecoveryService
+    recovery_checkpoint_service: RecoveryCheckpointService
     decision_service: DecisionService
     pending_confirmations: PendingConfirmationStore
     verification_service: VerificationService
@@ -129,6 +135,8 @@ class SheaRuntime:
     profile_service: ProfileService
     credential_broker: CredentialBroker
     credential_service: CredentialService
+    model_provider: SwitchableModelProvider
+    model_settings_service: ModelSettingsService
     memory_extractor: MemoryExtractor
     config_resolver: ConfigResolver
 
@@ -140,17 +148,21 @@ class SheaRuntime:
 
 
 def _load_dotenv() -> None:
-    """Load .env from the project root (parent of src/) or CWD, stdlib only.
+    """Load an explicit or local .env file, using only the standard library.
 
     Vars already set in the environment are NOT overwritten — explicit exports
     always win. This means ``SHEA_MODEL_PROVIDER=ghost python -m shea`` still
     works as expected.
     """
-    # Walk up from this file to find .env next to src/
-    candidates = [
-        Path(__file__).parent.parent.parent / ".env",  # repo root
-        Path.cwd() / ".env",                           # wherever the process started
-    ]
+    explicit_path = os.environ.get("SHEA_ENV_FILE")
+    candidates = (
+        [Path(explicit_path).expanduser()]
+        if explicit_path
+        else [
+            Path(__file__).parent.parent.parent / ".env",
+            Path.cwd() / ".env",
+        ]
+    )
     for dotenv_path in candidates:
         if not dotenv_path.is_file():
             continue
@@ -164,7 +176,7 @@ def _load_dotenv() -> None:
                 value = value.strip().strip("\"'")   # strip optional quotes
                 if key and key not in os.environ:    # don't override existing vars
                     os.environ[key] = value
-        break  # stop after the first .env found
+        break
 
 
 def _filesystem_roots(value: Iterable[str] | None, config_resolver: ConfigResolver | None = None) -> frozenset[str]:
@@ -174,7 +186,7 @@ def _filesystem_roots(value: Iterable[str] | None, config_resolver: ConfigResolv
         configured = config_resolver.resolve("SHEA_FILESYSTEM_ROOTS", None)
     else:
         configured = os.environ.get("SHEA_FILESYSTEM_ROOTS")
-        
+
     if configured:
         return frozenset(item for item in configured.split(os.pathsep) if item)
     return frozenset({str(Path.cwd())})
@@ -218,6 +230,14 @@ def build_runtime(
     task_channel = TaskChannel(event_bus, clock, id_generator)
 
     task_repository = SqliteTaskRepository(conn, unit_of_work=unit_of_work)
+    recovery_checkpoint_repository = SqliteRecoveryCheckpointRepository(
+        conn,
+        unit_of_work=unit_of_work,
+    )
+    recovery_checkpoint_service = RecoveryCheckpointService(
+        task_repository=task_repository,
+        checkpoint_repository=recovery_checkpoint_repository,
+    )
     plan_repository = SqlitePlanRepository(conn, unit_of_work=unit_of_work)
     receipt_repository = SqliteAppReceiptRepository(conn, unit_of_work=unit_of_work)
     audit_sink = SqliteAuditSink(conn, unit_of_work=unit_of_work)
@@ -244,6 +264,12 @@ def build_runtime(
     decision_repository = SqliteDecisionRepository(conn, unit_of_work=unit_of_work)
     vault_repo = SqliteVaultRepository(conn, unit_of_work=unit_of_work)
     secure_store = KeyringSecureStore(service_name="shea_agent")
+    switchable_provider = SwitchableModelProvider(provider)
+    model_settings_service = ModelSettingsService(
+        secure_store=secure_store,
+        provider=switchable_provider,
+    )
+    provider = switchable_provider
     credential_broker = SheaCredentialBroker(vault=vault_repo, secure_store=secure_store)
     credential_channel = CredentialChannel(event_bus, clock, id_generator)
     credential_service = CredentialService(
@@ -444,7 +470,7 @@ def build_runtime(
         id_generator=id_generator,
         model_provider=provider,
     )
-    
+
     planning_service = PlanningService(
         orchestrator=orchestrator,
         deterministic_matcher=matcher,
@@ -485,7 +511,7 @@ def build_runtime(
         pending_confirmations=pending_confirmations,
         clock=clock,
     )
-    
+
     memory_extractor = MemoryExtractor(
         event_bus=event_bus,
         memory_broker=memory_broker,
@@ -522,6 +548,7 @@ def build_runtime(
         interaction_service=interaction_service,
         plan_runner=plan_runner,
         recovery_service=recovery_service,
+        recovery_checkpoint_service=recovery_checkpoint_service,
         decision_service=decision_service,
         pending_confirmations=pending_confirmations,
         verification_service=verification_service,
@@ -531,6 +558,8 @@ def build_runtime(
         profile_service=profile_service,
         credential_broker=credential_broker,
         credential_service=credential_service,
+        model_provider=switchable_provider,
+        model_settings_service=model_settings_service,
         memory_extractor=memory_extractor,
         config_resolver=cast('ConfigResolver', config_resolver),
     )
@@ -541,6 +570,7 @@ def build_runtime(
     plugin_loader = PluginLoader(plugin_dir=f"{workspace}/plugins")
     plugin_loader.load_plugins(runtime)
     return runtime
+
 if __name__ == "__main__":
     import os
     print("Initializing SHEA Runtime and migrating database...")

@@ -464,65 +464,154 @@
               <section class="view" id="view-settings">
                 <header class="view-header"><h1>Settings</h1></header>
                 <div class="scroll">
-                  <div class="form-grid settings-form">
-                    <label
-                      >Theme
-                      <select class="field" id="set-theme">
-                        <option value="ember">Ember</option>
-                        <option value="ink">Ink</option>
-                        <option value="moss">Moss</option>
-                        <option value="paper">Paper</option>
-                      </select>
-                    </label>
-                    <label
-                      >Display name
-                      <input class="field" id="set-name" value="SHEA"
-                    /></label>
-                    <label
-                      >Brand letter
-                      <input
-                        class="field"
-                        id="set-mark"
-                        value="S"
-                        maxlength="2"
-                    /></label>
-                    <label
-                      >Agent avatar URL
-                      <input
-                        class="field"
-                        id="set-agent-avatar"
-                        placeholder="https://… or leave blank"
-                    /></label>
-                    <label
-                      >Your avatar URL
-                      <input
-                        class="field"
-                        id="set-user-avatar"
-                        placeholder="https://… or leave blank"
-                    /></label>
-                    <label
-                      >Session id
-                      <input
-                        class="field"
-                        id="chat-session"
-                        value="web-console"
-                    /></label>
-                    <label
-                      >Profile id
-                      <input class="field" id="chat-profile" value="default"
-                    /></label>
-                    <label class="check-row"
-                      ><input type="checkbox" id="set-grain" checked /> Film
-                      grain</label
-                    >
-                    <label class="check-row"
-                      ><input type="checkbox" id="set-nav-anim" checked /> Nav
-                      motion</label
-                    >
-                    <button class="btn primary" type="button" id="set-save">
-                      Save locally
-                    </button>
-                  </div>
+                  <section class="panel">
+                    <h2>Model provider</h2>
+                    <p class="muted">
+                      Enter a provider name and endpoint. Custom provider names
+                      use the OpenAI-compatible API; choose Ollama for a local
+                      Ollama server. Your API key is stored in the operating
+                      system keychain.
+                    </p>
+                    <form class="form-grid" id="model-provider-form">
+                      <label
+                        >Provider
+                        <select class="field" id="model-provider">
+                          <option value="openai-compatible">OpenAI-compatible</option>
+                          <option value="ollama">Ollama (local)</option>
+                          <option value="custom">Custom provider</option>
+                        </select>
+                      </label>
+                      <label id="custom-provider-name-row" class="hidden">
+                        Custom provider name
+                        <input
+                          class="field"
+                          id="custom-provider-name"
+                          placeholder="e.g. OpenRouter or Groq"
+                          aria-describedby="model-provider-help"
+                        />
+                        <span class="muted form-hint" id="model-provider-help">
+                          Custom providers must support the OpenAI-compatible API.
+                        </span>
+                      </label>
+                      <label
+                        >API base URL
+                        <input
+                          class="field"
+                          id="model-base-url"
+                          type="url"
+                          required
+                        />
+                      </label>
+                      <label
+                        >Model ID
+                        <select class="field" id="model-name">
+                          <option value="gpt-4o-mini">gpt-4o-mini</option>
+                          <option value="llama3.2">llama3.2</option>
+                          <option value="custom">Custom model</option>
+                        </select>
+                        <span class="muted form-hint" id="model-id-help">
+                          Select a model ID or choose Custom model to enter one.
+                        </span>
+                      </label>
+                      <label id="custom-model-name-row" class="hidden">
+                        Custom model ID
+                        <input
+                          class="field"
+                          id="custom-model-name"
+                          placeholder="Enter the exact model ID supported by the endpoint"
+                          aria-describedby="custom-model-name-help"
+                        />
+                        <span class="muted form-hint" id="custom-model-name-help">
+                          Enter the exact model ID supported by your provider.
+                        </span>
+                      </label>
+                      <label
+                        >API key
+                        <input
+                          class="field"
+                          id="model-api-key"
+                          type="password"
+                          autocomplete="new-password"
+                          placeholder="Enter your own key"
+                        />
+                      </label>
+                      <div class="form-actions">
+                        <button class="btn primary" type="submit">
+                          Save provider
+                        </button>
+                        <button class="btn danger hidden" type="button" id="model-clear">
+                          Clear saved provider
+                        </button>
+                      </div>
+                      <p id="model-settings-status" role="status" aria-live="polite"></p>
+                    </form>
+                    <div class="settings-subsection">
+                      <h2>Appearance and chat</h2>
+                      <p class="muted">
+                        Personalize the interface and choose the session defaults
+                        used by this browser.
+                      </p>
+                      <div class="form-grid settings-form">
+                        <label
+                          >Theme
+                          <select class="field" id="set-theme">
+                            <option value="ember">Ember</option>
+                            <option value="ink">Ink</option>
+                            <option value="moss">Moss</option>
+                            <option value="paper">Paper</option>
+                          </select>
+                        </label>
+                        <label
+                          >Display name
+                          <input class="field" id="set-name" value="SHEA"
+                        /></label>
+                        <label
+                          >Brand letter
+                          <input
+                            class="field"
+                            id="set-mark"
+                            value="S"
+                            maxlength="2"
+                        /></label>
+                        <label
+                          >Agent avatar URL
+                          <input
+                            class="field"
+                            id="set-agent-avatar"
+                            placeholder="https://… or leave blank"
+                        /></label>
+                        <label
+                          >Your avatar URL
+                          <input
+                            class="field"
+                            id="set-user-avatar"
+                            placeholder="https://… or leave blank"
+                        /></label>
+                        <label
+                          >Session id
+                          <input
+                            class="field"
+                            id="chat-session"
+                            value="web-console"
+                        /></label>
+                        <label
+                          >Profile id
+                          <input class="field" id="chat-profile" value="default"
+                        /></label>
+                        <label class="check-row"
+                          ><input type="checkbox" id="set-grain" checked /> Film
+                          grain</label
+                        >
+                        <label class="check-row"
+                          ><input type="checkbox" id="set-nav-anim" checked /> Nav
+                          motion</label
+                        >
+                        <button class="btn primary" type="button" id="set-save">
+                          Save locally
+                        </button>
+                      </div>
+                    </div>
+                  </section>
                 </div>
               </section>
             </div>
@@ -530,6 +619,6 @@
         </dialog>
       </main>
     </div>
-    <script src="/app.js?v=1789835719"></script>
+    <script src="/app.js?v=1789835720"></script>
   </body>
 </html>

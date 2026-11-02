@@ -1,11 +1,31 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
-from shea.bootstrap import build_runtime
+import pytest
+
+from shea.bootstrap import _load_dotenv, build_runtime
 from shea.contracts.enums import TaskState
 from shea.contracts.models import ModelResponse
 from shea.model.scripted import ScriptedModelProvider
+
+
+def test_load_dotenv_uses_explicit_file_without_overriding_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_file = tmp_path / "shea.env"
+    env_file.write_text(
+        "SHEA_TEST_CONFIG_FROM_FILE=loaded\nSHEA_TEST_CONFIG_PRECEDENCE=file\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SHEA_ENV_FILE", str(env_file))
+    monkeypatch.setenv("SHEA_TEST_CONFIG_PRECEDENCE", "environment")
+
+    _load_dotenv()
+
+    assert os.environ["SHEA_TEST_CONFIG_FROM_FILE"] == "loaded"
+    assert os.environ["SHEA_TEST_CONFIG_PRECEDENCE"] == "environment"
 
 
 def test_build_runtime_starts(tmp_path: Path) -> None:

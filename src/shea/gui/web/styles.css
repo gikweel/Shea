@@ -107,6 +107,9 @@ textarea {
   font: inherit;
   color: inherit;
 }
+.hidden {
+  display: none !important;
+}
 button {
   cursor: pointer;
   border: none;
@@ -689,6 +692,22 @@ th {
   color: var(--ink-faint);
   font-weight: 600;
 }
+.panel h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 600;
+}
+.panel > .muted {
+  margin-bottom: 16px;
+}
+.settings-subsection {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.settings-subsection > h2 {
+  margin-bottom: 8px;
+}
 
 .item-card {
   padding: 14px 0;
@@ -749,13 +768,16 @@ th {
   border-radius: 8px;
   padding: 8px 10px;
 }
+.form-hint {
+  font-size: 12px;
+}
 .check-row {
   flex-direction: row !important;
   align-items: center;
   gap: 8px !important;
 }
 .settings-form {
-  max-width: 400px;
+  max-width: 560px;
 }
 
 .metrics-grid {

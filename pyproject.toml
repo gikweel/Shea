@@ -11,19 +11,26 @@ readme = "README.md"
 dependencies = [
     "cryptography>=42.0",
     "keyring>=24.0.0",
+]
+
+[project.optional-dependencies]
+app = [
     "fastapi",
     "uvicorn",
     "pywebview",
     "click",
     "sse-starlette",
 ]
-
-[project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "hypothesis>=6.100",
     "mypy>=1.10",
     "ruff>=0.6",
+    "fastapi",
+    "uvicorn",
+    "pywebview",
+    "click",
+    "sse-starlette",
 ]
 browser = [
     "playwright>=1.40",

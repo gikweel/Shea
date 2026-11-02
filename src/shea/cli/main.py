@@ -41,6 +41,7 @@ def chat(db_path: str, workspace: str) -> None:
 
     click.secho("Booting Shea Runtime...", fg="yellow")
     runtime = build_runtime(db_path=db_path, workspace=workspace)
+    runtime.model_settings_service.load_saved()
 
     click.secho("System ready. Type 'exit' to quit.", fg="green", bold=True)
 
@@ -77,14 +78,13 @@ def chat(db_path: str, workspace: str) -> None:
     click.echo("\nGoodbye!")
 
 
-if __name__ == "__main__":
-    cli()
 @cli.command(name="listen")
 @click.option("--db-path", default="shea.db", help="Path to SQLite database.")
 def listen_cmd(db_path: str) -> None:
     """Start the audio wake-word interaction loop."""
     
     runtime = build_runtime(db_path=db_path)
+    runtime.model_settings_service.load_saved()
     
     # We need to run the runtime event bus in the background if it has async listeners,
     # but the audio loop is strictly synchronous right now (mock input).
@@ -93,3 +93,7 @@ def listen_cmd(db_path: str) -> None:
     click.secho("Starting Audio Interaction Service...", fg="cyan", bold=True)
     audio_service = AudioInteractionService(runtime)
     audio_service.start_loop()
+
+
+if __name__ == "__main__":
+    cli()

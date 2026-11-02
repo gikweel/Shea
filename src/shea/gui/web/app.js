@@ -135,6 +135,7 @@ $$(".modal-sidebar .nav-item").forEach((btn) => {
       tools: loadTools,
       audit: loadAudit,
       system: refreshSystem,
+      settings: loadModelSettings,
     })[v]?.();
   });
 });
@@ -710,6 +711,163 @@ $("#vault-form")?.addEventListener("submit", async (e) => {
   });
   e.target.reset();
   loadVault();
+});
+
+const modelProviderDefaults = {
+  "openai-compatible": {
+    baseUrl: "https://api.openai.com/v1",
+    model: "gpt-4o-mini",
+  },
+  ollama: {
+    baseUrl: "http://127.0.0.1:11434/v1",
+    model: "llama3.2",
+  },
+};
+
+function modelProviderDefault(provider) {
+  return modelProviderDefaults[provider.toLowerCase()] ||
+    modelProviderDefaults["openai-compatible"];
+}
+
+function selectedModelProvider() {
+  const provider = $("#model-provider").value;
+  return provider === "custom" ? $("#custom-provider-name").value.trim() : provider;
+}
+
+function selectedModelName() {
+  const model = $("#model-name").value;
+  return model === "custom" ? $("#custom-model-name").value.trim() : model;
+}
+
+function toggleCustomModelInput(show) {
+  const customName = $("#custom-model-name");
+  customName.required = show;
+  $("#custom-model-name-row").classList.toggle("hidden", !show);
+}
+
+function setModelName(model) {
+  const options = Array.from($("#model-name").options).map((option) => option.value);
+  const isKnownModel = options.includes(model);
+  const selector = $("#model-name");
+  const customName = $("#custom-model-name");
+  selector.value = isKnownModel ? model : "custom";
+  customName.value = isKnownModel ? "" : model || "";
+  toggleCustomModelInput(!isKnownModel);
+}
+
+function setModelProvider(provider) {
+  const knownProvider = Object.keys(modelProviderDefaults).find(
+    (name) => name.toLowerCase() === provider?.toLowerCase(),
+  );
+  const selector = $("#model-provider");
+  const customName = $("#custom-provider-name");
+  const customRow = $("#custom-provider-name-row");
+  selector.value = knownProvider || "custom";
+  customName.value = knownProvider ? "" : provider || "";
+  customName.required = !knownProvider;
+  customRow.classList.toggle("hidden", Boolean(knownProvider));
+}
+
+async function loadModelSettings() {
+  const status = $("#model-settings-status");
+  try {
+    const response = await fetch("/api/model-settings/");
+    const settings = await response.json();
+    if (!response.ok) throw new Error(settings.detail || "Could not load model settings.");
+
+    const baseUrl = $("#model-base-url");
+    const apiKey = $("#model-api-key");
+    const selectedProvider = settings.provider || "openai-compatible";
+    const chatModel = $("#model-select");
+    const defaultModelOption = chatModel?.querySelector('option[value=""]');
+    if (defaultModelOption) {
+      defaultModelOption.textContent = settings.configured && settings.model_name
+        ? `configured · ${settings.model_name}`
+        : "default";
+      defaultModelOption.title = settings.configured
+        ? "Use the custom model configured in Settings"
+        : "Use the default model provider";
+    }
+    setModelProvider(selectedProvider);
+    baseUrl.value =
+      settings.base_url || modelProviderDefault(selectedProvider).baseUrl;
+    setModelName(settings.model_name || modelProviderDefault(selectedProvider).model);
+    apiKey.value = "";
+    apiKey.placeholder = settings.api_key_configured
+      ? "Leave blank to keep the saved key"
+      : selectedProvider.toLowerCase() === "ollama"
+        ? "Not required for local Ollama"
+        : "Enter your own provider key";
+    $("#model-clear").classList.toggle("hidden", !settings.configured);
+    if (status) {
+      status.textContent = settings.configured
+        ? `Saved: ${selectedProvider}${settings.api_key_configured ? " (API key stored securely)" : ""}`
+        : "No interface-saved provider. Existing environment providers remain available.";
+    }
+  } catch (error) {
+    if (status) status.textContent = error.message;
+  }
+}
+
+$("#model-provider")?.addEventListener("change", (event) => {
+  const selectedProvider = event.target.value;
+  const customName = $("#custom-provider-name");
+  const customRow = $("#custom-provider-name-row");
+  const isCustom = selectedProvider === "custom";
+  customName.required = isCustom;
+  customRow.classList.toggle("hidden", !isCustom);
+  const defaults = modelProviderDefault(
+    isCustom ? "openai-compatible" : selectedProvider,
+  );
+  $("#model-base-url").value = defaults.baseUrl;
+  setModelName(defaults.model);
+  $("#model-api-key").value = "";
+  $("#model-api-key").placeholder =
+    selectedProvider === "ollama"
+      ? "Not required for local Ollama"
+      : "Enter your own provider key";
+});
+
+$("#model-name")?.addEventListener("change", (event) => {
+  toggleCustomModelInput(event.target.value === "custom");
+});
+
+$("#model-provider-form")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const status = $("#model-settings-status");
+  if (status) status.textContent = "Saving provider settings…";
+  try {
+    const response = await fetch("/api/model-settings/", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: selectedModelProvider(),
+        base_url: $("#model-base-url").value,
+        model_name: selectedModelName(),
+        api_key: $("#model-api-key").value,
+      }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || "Could not save provider settings.");
+    await loadModelSettings();
+    if (status) status.textContent = "Provider saved and ready to use.";
+  } catch (error) {
+    if (status) status.textContent = error.message;
+  }
+});
+
+$("#model-clear")?.addEventListener("click", async () => {
+  if (!window.confirm("Remove the saved provider and API key from the keychain?")) return;
+  const status = $("#model-settings-status");
+  try {
+    const response = await fetch("/api/model-settings/", { method: "DELETE" });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || "Could not clear model settings.");
+    await loadModelSettings();
+    if (status) status.textContent = "Saved provider removed.";
+  } catch (error) {
+    if (status) status.textContent = error.message;
+  }
 });
 
 async function loadProfiles() {

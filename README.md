@@ -27,6 +27,74 @@ Phase 11 (Final Completion) delivers **Universal Reconciliation** (sweeping orph
 
 ## Quick start
 
+To install the latest `main` branch on macOS or Linux without cloning the
+repository or manually creating the environment, run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mwasgibson/Shea/main/install.sh | bash
+```
+
+For a terminal-only installation without web or desktop dependencies, run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mwasgibson/Shea/main/install.sh | bash -s -- --cli-only
+```
+
+The installer creates an isolated Python environment under
+`~/.local/share/shea`, initializes the database and workspace, and adds a
+`~/.local/bin/shea` command when that path is available. That command uses the
+installed database and workspace automatically. If `~/.local/bin` is not on
+`PATH`, run `~/.local/bin/shea` directly or add that directory to your `PATH`.
+Set `SHEA_INSTALL_DIR` before running the installer to choose a different data
+and environment directory.
+
+Configure a model in the app under **Settings → Model provider**, or run
+`shea configure-model` for an interactive terminal setup. The CLI hides API-key
+input, and Shea stores the key in the operating system's secure keychain—not in
+browser storage or command-line arguments. Local Ollama can be selected without
+a cloud API key. Shea does not require a provider for template-based tasks.
+The `--cli-only` installation uses the same terminal setup and commands without
+installing the web or desktop interface dependencies.
+
+The regular installation includes the desktop interface. Launch its native
+window with `shea desktop` (or `~/.local/share/shea/venv/bin/shea desktop` if
+`~/.local/bin` is not on `PATH`). Do not use `--cli-only` if you want the desktop
+application.
+
+## Standalone desktop downloads
+
+Pushing a version tag such as `v0.1.0` builds and attaches desktop installers
+to a GitHub Release:
+
+- Windows x64: `Shea-Windows-x64-Setup.exe`
+- macOS Apple Silicon and Intel: `Shea-macos-arm64.dmg` and `Shea-macos-x64.dmg`
+- Linux x64: `Shea-Linux-x86_64.AppImage`
+
+The macOS and Windows packages are currently unsigned, so those operating
+systems may show a security warning. The Windows installer includes the
+WebView2 bootstrapper and installs the runtime if needed. No download packages
+will appear until a version tag has been built by the release workflow.
+
+To update a standalone desktop build, download and run its newer platform
+installer from GitHub Releases. Automatic in-app installation is not supported
+yet. The Python wheel updater and its code-snapshot restore commands are only
+supported by Python package installs; they are intentionally disabled for
+frozen desktop packages. Desktop app data is stored separately from the
+installed application.
+
+This installs the current `main` source as a regular package. In-app updates
+come from GitHub Releases and require a release to be published.
+
+To install from a source checkout instead, run:
+
+```bash
+./install.sh
+```
+
+For a terminal-only install from a checkout, run `./install.sh --cli-only`.
+
+For development:
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
@@ -48,6 +116,7 @@ Demo phrases use deterministic templates (no LLM required).
 | Extra | Purpose |
 | --- | --- |
 | `[dev]` | "pytest, hypothesis, mypy, ruff" |
+| `[app]` | FastAPI web interface and desktop application dependencies |
 | `[browser]` | Playwright (optional engine) |
 | `[audio]` | Vosk offline speech recognition |
 
@@ -138,14 +207,42 @@ Boot runs `reconcile_app_plane()` for stuck EP work.
 python -m shea --db PATH --workspace DIR run "…"
 ```
 
+### Backup, restore, and updates
+
+Snapshots are stored beside the selected database in `snapshots/`. A snapshot
+contains a rollback wheel for the currently installed Shea code, a consistent
+SQLite backup, and `config.json` when present. `.env` is intentionally not
+copied. Restore replaces the installed code and `config.json`, but preserves
+the current database and `.env`; it creates a fresh snapshot first so a failed
+restore can roll back.
+Because restore keeps the live database, it does not reverse database schema
+migrations; take a separate database copy before restoring across a schema
+change.
+
+```bash
+python -m shea --db shea.db backup
+python -m shea --db shea.db snapshots
+python -m shea --db shea.db restore SNAPSHOT_ID
+python -m shea --db shea.db update
+```
+
+Updates are checked against stable GitHub Releases in `mwasgibson/Shea` by
+default; `--channel prerelease` also considers prereleases. The updater
+snapshots the current installation before installing the release archive and
+restores that snapshot if installation fails. From an editable checkout, the
+rollback wheel is built from the matching local project; applying a release
+converts that environment to a regular installed package. No update is offered
+when no newer release exists.
+
 | Env | Role |
 | --- | --- |
 | SHEA_FILESYSTEM_ROOTS | Allowed roots (pathsep-separated) |
 | SHEA_VOSK_MODEL | Path to the extracted local Vosk model directory |
 | SHEA_WAKE_WORD | Phrase that activates audio requests; removed before dispatch |
 | SHEA_MODEL_PROVIDER | `puter` , `ollama` , `ghost` , `openai` |
-| SHEA_PUTER_TOKEN / OPENAI_API_KEY / GHOST_* | Credentials |
+| SHEA_PUTER_TOKEN / OPENAI_API_KEY / GHOST_* / ANTHROPIC_AUTH_TOKEN | Optional environment-based credentials |
 | SHEA_MODEL_NAME / SHEA_MODEL_BASE_URL / SHEA_MODEL_TIMEOUT | Model settings |
+| SHEA_ENV_FILE | Explicit path to the environment config file |
 | SHEA_LIVE_NETWORK | 1 for live network/browser tests |
 
 ## What's here (packages)
@@ -155,7 +252,7 @@ python -m shea --db PATH --workspace DIR run "…"
 | `shea.contracts` | Typed, framework-free data shapes: `Request`, `Intent`, `Task`, `Plan`, `PlanStep`, `Decision`, `RiskAssessment`, `Authorization`, `AuditEvent`, `ToolRequest`/`ToolResponse`, `ModelResponse`, `ToolExecutionRecord`, `VerificationRecord`, `RecoveryAttempt`. |
 | `shea.ports` | Abstract interfaces (`TaskRepository`, `PlanRepository`, `IntentRepository`, `DecisionRepository`, `RiskAssessmentRepository`, `AuthorizationRepository`, `ToolExecutionRepository`, `VerificationRepository`, `RecoveryAttemptRepository`, `AuditSink`, `Clock`, `IdGenerator`, `ModelProvider`, `UnitOfWork`) — the hexagonal boundary. Nothing concrete lives here. |
 | `shea.state_machine` | Authoritative transition table (Appendix A, plus `execution_unknown` and `step_verified`) and `next_state()` — the only function allowed to change task state. Illegal transitions raise `IllegalTransitionError`. |
-| `shea.persistence.sqlite` | Concrete adapters implementing the ports above: connection handling, numbered SQL migrations through `0009`, repositories (including `SqliteVaultRepository` and `SqliteMemoryService`), and `audit_chain.py` (`verify_audit_chain` — walks `audit_events` and reports `content_altered`/`link_broken`/`sequence_gap` breaks). SQLite is the source of truth for task/plan state — not an in-memory cache with SQLite as backup. |
+| `shea.persistence.sqlite` | Concrete adapters implementing the ports above: connection handling, numbered SQL migrations through `0015`, repositories (including recovery checkpoints, `SqliteVaultRepository`, and `SqliteMemoryService`), and `audit_chain.py` (`verify_audit_chain` — walks `audit_events` and reports `content_altered`/`link_broken`/`sequence_gap` breaks). SQLite is the source of truth for task/plan state — not an in-memory cache with SQLite as backup. |
 | `shea.config` | The six-layer configuration resolver (System → Machine → User → Profile → Project → Session), with `security_invariant_keys` that can only ever be set at the System layer regardless of what any other layer says. |
 | `shea.core` | The `Orchestrator` — thin coordination of task lifecycle. Creates tasks, advances them via the state machine, attaches plans, persists, and audits every attempt (success *and* rejection). Each state write and its audit event commit or roll back together via a shared `UnitOfWork`, not as two independent commits. |
 | `shea.model` | `ModelProvider` port (`generate()`/`health()`/`capabilities()`) and `ScriptedModelProvider` — a deterministic queued-response double. No real LLM API integration ships here; that's the Provider Routing phase's job. |

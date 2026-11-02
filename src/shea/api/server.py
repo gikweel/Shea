@@ -8,7 +8,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from shea.api.routes import credentials, interaction, memory, observability, profiles, tasks, tools
+from shea.api.routes import (
+    credentials,
+    interaction,
+    memory,
+    model_settings,
+    observability,
+    profiles,
+    tasks,
+    tools,
+)
 from shea.bootstrap import build_runtime
 
 
@@ -20,6 +29,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     workspace = os.environ.get("SHEA_WORKSPACE", "./workspace")
     
     runtime = build_runtime(db_path=db_path, workspace=workspace, include_http_fetch=True)
+    runtime.model_settings_service.load_saved()
     app.state.runtime = runtime
     
     yield  # Server runs here
@@ -54,6 +64,7 @@ def create_app() -> FastAPI:
     app.include_router(memory.router, prefix="/api")
     app.include_router(observability.router, prefix="/api")
     app.include_router(credentials.router, prefix="/api")
+    app.include_router(model_settings.router, prefix="/api")
     app.include_router(tasks.router, prefix="/api")
     app.include_router(profiles.router, prefix="/api")
     app.include_router(tools.router, prefix="/api")

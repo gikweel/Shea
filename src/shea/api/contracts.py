@@ -65,6 +65,21 @@ class CredentialCreateRequest(BaseModel):
     allowed_tools: list[str] = Field(default_factory=lambda: ["*"])
 
 
+class ModelSettingsView(BaseModel):
+    provider: str | None = None
+    base_url: str | None = None
+    model_name: str | None = None
+    configured: bool
+    api_key_configured: bool
+
+
+class ModelSettingsUpdate(BaseModel):
+    provider: str = Field(..., min_length=1, max_length=64)
+    base_url: str = Field(..., min_length=1, max_length=2048)
+    model_name: str = Field(..., min_length=1, max_length=200)
+    api_key: str = Field(default="", max_length=4096)
+
+
 class TaskView(BaseModel):
     id: str
     session_id: str

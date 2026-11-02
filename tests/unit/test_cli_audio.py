@@ -27,7 +27,11 @@ def test_listen_command_starts_audio_service_and_closes_runtime(
             self.closed = True
 
     connection = Connection()
-    runtime = SimpleNamespace(conn=connection)
+    loaded: list[bool] = []
+    runtime = SimpleNamespace(
+        conn=connection,
+        model_settings_service=SimpleNamespace(load_saved=lambda: loaded.append(True)),
+    )
     build_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
 
     def build_runtime(*args: Any, **kwargs: Any) -> Any:
@@ -55,4 +59,34 @@ def test_listen_command_starts_audio_service_and_closes_runtime(
         )
     ]
     assert started == [runtime]
+    assert loaded == [True]
     assert connection.closed is True
+
+
+def test_run_command_loads_interface_saved_model_settings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    loaded: list[bool] = []
+    runtime = SimpleNamespace(
+        model_settings_service=SimpleNamespace(load_saved=lambda: loaded.append(True)),
+    )
+
+    class SheaApp:
+        def __init__(self, value: object) -> None:
+            assert value is runtime
+
+        def chat(self, *_: Any, **__: Any) -> Any:
+            return SimpleNamespace(
+                task=None,
+                message="Ready",
+                error=None,
+                planning=None,
+                run=None,
+            )
+
+    monkeypatch.setattr(shea_main, "build_runtime", lambda *_, **__: runtime)
+    monkeypatch.setattr(shea_main, "SheaApp", SheaApp)
+
+    shea_main.main(["--workspace", str(tmp_path), "run", "hello"])
+
+    assert loaded == [True]
