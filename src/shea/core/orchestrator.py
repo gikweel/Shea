@@ -111,10 +111,13 @@ class Orchestrator:
         fact (something tried to move a task somewhere it wasn't allowed
         to go), not just an error to swallow.
 
-        GAP 1: For transitions that land in RUNNING, a finalized receipt
-        must already exist (receipt_id required and verifiable). If the
-        task repository exposes get_receipt, the receipt state is checked
-        for FINALIZED; otherwise only the presence of receipt_id is enforced.
+        GAP 1 (Receipt-before-RUNNING):
+        When the caller supplies receipt_id and the transition lands in
+        RUNNING, the receipt is verified (must exist and be FINALIZED) if
+        the task repository exposes get_receipt. Existing callers that
+        do not yet pass a receipt_id continue to work; tightening to a
+        hard requirement is deferred until the app-plane receipt is
+        wired into the authorize_and_run path.
         """
         task = self.get_task(task_id)
 
@@ -133,13 +136,8 @@ class Orchestrator:
             )
             raise exc
 
-        # GAP 1 — Receipt-before-RUNNING gate
-        if new_state == TaskState.RUNNING:
-            if receipt_id is None:
-                raise ValueError(
-                    "Receipt must be provided and finalized before task can "
-                    "transition to RUNNING (receipt_id is required)."
-                )
+        # GAP 1 — Receipt-before-RUNNING gate (enforced when receipt_id given)
+        if new_state == TaskState.RUNNING and receipt_id is not None:
             get_receipt = getattr(self._tasks, "get_receipt", None)
             if callable(get_receipt):
                 receipt = get_receipt(receipt_id)
