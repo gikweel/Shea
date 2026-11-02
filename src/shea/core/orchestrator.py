@@ -59,7 +59,13 @@ class Orchestrator:
         self._uow = unit_of_work
         self._events = task_channel
 
-    def create_task(self, *, session_id: str, request_id: str, profile_snapshot: dict[str, Any] | None = None) -> Task:
+    def create_task(
+        self,
+        *,
+        session_id: str,
+        request_id: str,
+        profile_snapshot: dict[str, Any] | None = None,
+    ) -> Task:
         now = self._clock.now()
         task = Task(
             id=self._ids.new_id(),
@@ -92,13 +98,25 @@ class Orchestrator:
             raise TaskNotFoundError(task_id)
         return task
 
-    def advance(self, task_id: str, event: str) -> Task:
+    def advance(
+        self,
+        task_id: str,
+        event: str,
+        receipt_id: str | None = None,
+    ) -> Task:
         """Attempt to move `task_id` forward by `event`.
 
         Every call is audited, whether it succeeds or is rejected as
         illegal — a rejected transition is itself a security-relevant
         fact (something tried to move a task somewhere it wasn't allowed
         to go), not just an error to swallow.
+
+        GAP 1: For transitions that land in RUNNING, a finalized receipt
+        must already exist (receipt_id required and verifiable). Callers
+        that do not yet have a receipt repository wired may still pass
+        receipt_id=None; the gate then only enforces the parameter when
+        a receipt_id is supplied or when the target state is RUNNING and
+        the repository exposes get_receipt.
         """
         task = self.get_task(task_id)
 
@@ -117,6 +135,30 @@ class Orchestrator:
             )
             raise exc
 
+        # GAP 1 — Receipt-before-RUNNING gate
+        if new_state == TaskState.RUNNING:
+            if receipt_id is None:
+                raise ValueError(
+                    "Receipt must be provided and finalized before task can "
+                    "transition to RUNNING (receipt_id is required)."
+                )
+            get_receipt = getattr(self._tasks, "get_receipt", None)
+            if callable(get_receipt):
+                receipt = get_receipt(receipt_id)
+                # ReceiptState.FINALIZED lives in shea.app.enums; compare by value
+                # so core does not hard-depend on the app plane at import time.
+                receipt_state = getattr(receipt, "state", None)
+                state_value = (
+                    receipt_state.value
+                    if hasattr(receipt_state, "value")
+                    else str(receipt_state) if receipt_state is not None else None
+                )
+                if receipt is None or state_value != "FINALIZED":
+                    raise ValueError(
+                        f"Receipt {receipt_id} must be finalized before task can "
+ ent f"transition to RUNNING. Current receipt state: {state_value or 'none'}"
+                    )
+
         from_state = task.state
         task.state = new_state
         task.updated_at = self._clock.now()
@@ -131,11 +173,19 @@ class Orchestrator:
                 result="success",
                 request_id=task.request_id,
                 task_id=task.id,
-                metadata={"from_state": from_state.value, "to_state": new_state.value},
+                metadata={
+                    "from_state": from_state.value,
+                    "to_state": new_state.value,
+                    "receipt_id": receipt_id,
+                },
             )
         if self._events is not None:
             self._events.state_changed(
-                task.id, from_state, new_state, event, request_id=task.request_id,
+                task.id,
+                from_state,
+                new_state,
+                event,
+                request_id=task.request_id,
             )
         return task
 
@@ -166,21 +216,55 @@ class Orchestrator:
 
     def cancel_task(self, task_id: str, reason: str = "User cancelled") -> Task:
         task = self.get_task(task_id)
-        if task.state in (TaskState.COMPLETED, TaskState.CANCELLED, TaskState.SECURITY_HALT, TaskState.FAILED, TaskState.BLOCKED):
+        if task.state in (
+            TaskState.COMPLETED,
+            TaskState.CANCELLED,
+            TaskState.SECURITY_HALT,
+            TaskState.FAILED,
+            TaskState.BLOCKED,
+        ):
             return task
-        
+
         old_state = task.state
         task.state = TaskState.CANCELLED
         self._tasks.save(task)
         if self._events is not None:
             self._events.state_changed(
-                task.id, 
-                old_state, 
-                task.state, 
+                task.id,
+                old_state,
+                task.state,
                 "cancelled",
-                request_id=task.request_id
+                request_id=task.request_id,
             )
         return task
 
     def list_transient_tasks(self) -> list[Task]:
         return self._tasks.list_transient_tasks()
+
+    # -----------------------------------------------------------------------
+    # GAP 4 — Phased deployment gate
+    # Only allow advancing one phase at a time. Track current_phase in task
+    # metadata or a separate config; call this before any phase-advancing work.
+    # -----------------------------------------------------------------------
+    def check_phase_gate(self, requested_phase: int, current_phase: int) -> bool:
+        """Enforce phased deployment: only advance one phase at a time."""
+        phase_rules: dict[int, set[int]] = {
+            1: {0},  # Phase 1 can start from scratch
+            2: {1},
+            3: {2},
+            4: {3},
+            5: {4},
+            6: {5},
+            7: {6},
+            8: {7},
+            9: {8},  # Phase 9 requires Phase 8 complete
+        }
+        allowed_prereqs = phase_rules.get(requested_phase, set())
+        return current_phase in allowed_prereqs
+
+    def require_phase_gate(self, requested_phase: int, current_phase: int) -> None:
+        """Raise if the requested phase is not allowed from current_phase."""
+        if not self.check_phase_gate(requested_phase, current_phase):
+            raise ValueError(
+                f"Phase {requested_phase} cannot start until phase {current_phase} is complete"
+            )
