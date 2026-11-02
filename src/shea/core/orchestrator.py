@@ -215,7 +215,7 @@ class Orchestrator:
             self._events.plan_attached(task.id, plan_id, request_id=task.request_id)
         return task
 
- def cancel_task(self, task_id: str, reason: str = "User cancelled") -> Task:
+    def cancel_task(self, task_id: str, reason: str = "User cancelled") -> Task:
         task = self.get_task(task_id)
         if task.state in (
             TaskState.COMPLETED,
