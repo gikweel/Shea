@@ -25,6 +25,7 @@ from shea.contracts.models import Task, ToolExecutionRecord, ToolRequest, ToolRe
 from shea.core.orchestrator import Orchestrator
 from shea.credentials.ports import CredentialBroker
 from shea.events.channels import ExecutionChannel
+from shea.execution.authorization import check_authorization_binding
 from shea.execution.permit import ExecutionPermitAuthority
 from shea.observability.metrics import global_metrics
 from shea.ports.clock import Clock
@@ -38,16 +39,6 @@ from shea.ports.repositories import (
 )
 from shea.ports.unit_of_work import UnitOfWork
 from shea.recovery.idempotency import IdempotencyKeyGenerator
-from shea.security.binding import (
-    compute_arguments_hash,
-    compute_plan_hash,
-    compute_step_hash,
-)
-from shea.security.exceptions import (
-    AuthorizationAlreadyUsedError,
-    AuthorizationBindingMismatchError,
-    AuthorizationExpiredError,
-)
 from shea.security.service import SecurityService
 
 if TYPE_CHECKING:
@@ -481,75 +472,20 @@ class ExecutionService:
         )
         
     def _verify_authorization_binding(self, task: Task, request: ToolRequest) -> None:
-        """Verify that the authorization for this task matches the current request.
+        """Verify that the task's most recent authorization covers this request.
 
-        Checks:
-        1. Authorization exists for this task
-        2. Plan hash matches (if authorization has a plan_hash)
-        3. Step hash matches (if authorization has a step_hash)
-        4. Arguments hash matches (if authorization has an arguments_hash)
-        5. Authorization has not expired
-        6. Authorization nonce has not been used (replay protection)
+        The rules live in `check_authorization_binding` (shared with the
+        supervisor's independent check); this only supplies the records.
         """
-        # Get the most recent authorization for this task
         authorizations = self._authorizations.list_by_task(task.id)
         if not authorizations:
             raise MissingDecisionError(task.id)
 
-        auth = authorizations[-1]
-
-        # Isolation check: Ensure auth belongs to the current profile snapshot bound to the task
-        active_profile_id = "system"
-        if task.profile_snapshot and "profile_id" in task.profile_snapshot:
-            active_profile_id = task.profile_snapshot["profile_id"]
-        if auth.profile_id != active_profile_id and auth.profile_id != "system":
-            raise AuthorizationAlreadyUsedError(task.id, "Profile mismatch - Security Violation")
-
-        # Replay: already consumed
-        if auth.used_at is not None:
-            raise AuthorizationAlreadyUsedError(task.id, auth.nonce or "")
-
-        # Expiry
-        if auth.expires_at is not None and auth.expires_at < self._clock.now():
-            raise AuthorizationExpiredError(task.id, auth.expires_at)
-
-        current_plan = self._plans.get_by_task(task.id)
-
-        if auth.plan_hash is not None:
-            if current_plan is None:
-                raise AuthorizationBindingMismatchError(
-                    task.id, "plan", auth.plan_hash, None
-                )
-            current_plan_hash = compute_plan_hash(current_plan)
-            if auth.plan_hash != current_plan_hash:
-                raise AuthorizationBindingMismatchError(
-                    task.id, "plan", auth.plan_hash, current_plan_hash
-                )
-
-        if auth.step_hash is not None:
-            if current_plan is None:
-                raise AuthorizationBindingMismatchError(
-                    task.id, "step", auth.step_hash, None
-                )
-            matching_step = next(
-                (
-                    s
-                    for s in current_plan.steps
-                    if s.tool == request.tool and compute_step_hash(s) == auth.step_hash
-                ),
-                None,
-            )
-            if matching_step is None:
-                # If no step has this exact hash, compute candidate hash for diagnostic
-                candidate = next((s for s in current_plan.steps if s.tool == request.tool), None)
-                candidate_hash = compute_step_hash(candidate) if candidate else None
-                raise AuthorizationBindingMismatchError(
-                    task.id, "step", auth.step_hash, candidate_hash
-                )
-
-        if auth.arguments_hash is not None:
-            current_arguments_hash = compute_arguments_hash(request.arguments)
-            if auth.arguments_hash != current_arguments_hash:
-                raise AuthorizationBindingMismatchError(
-                    task.id, "arguments", auth.arguments_hash, current_arguments_hash
-                )
+        check_authorization_binding(
+            task=task,
+            auth=authorizations[-1],
+            plan=self._plans.get_by_task(task.id),
+            tool=request.tool,
+            arguments=request.arguments,
+            now=self._clock.now(),
+        )

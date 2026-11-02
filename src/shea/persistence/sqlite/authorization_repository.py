@@ -65,32 +65,37 @@ class SqliteAuthorizationRepository:
                 },
             )
 
+    _COLUMNS = (
+        "id, task_id, profile_id, granted, granted_by, explicit, "
+        "plan_hash, step_hash, arguments_hash, expires_at, used_at, nonce"
+    )
+
+    def get(self, authorization_id: str) -> Authorization | None:
+        row = self._conn.execute(
+            f"SELECT {self._COLUMNS} FROM authorizations WHERE id = ?",
+            (authorization_id,),
+        ).fetchone()
+        return self._row_to_authorization(row) if row is not None else None
+
     def list_by_task(self, task_id: str) -> list[Authorization]:
         rows = self._conn.execute(
-            """
-            SELECT id, task_id, profile_id, granted, granted_by, explicit,
-                   plan_hash, step_hash, arguments_hash, expires_at, used_at, nonce
-            FROM authorizations
-            WHERE task_id = ?
-            ORDER BY rowid ASC
-            """,
+            f"SELECT {self._COLUMNS} FROM authorizations WHERE task_id = ? ORDER BY rowid ASC",
             (task_id,),
         ).fetchall()
+        return [self._row_to_authorization(row) for row in rows]
 
-        return [
-            Authorization(
-                id=row["id"],
-                task_id=row["task_id"],
-                profile_id=row["profile_id"],
-                granted=bool(row["granted"]),
-                granted_by=row["granted_by"],
-                explicit=bool(row["explicit"]),
-                plan_hash=row["plan_hash"],
-                step_hash=row["step_hash"],
-                arguments_hash=row["arguments_hash"],
-                expires_at=self._parse_optional_datetime(row["expires_at"]),
-                used_at=self._parse_optional_datetime(row["used_at"]),
-                nonce=row["nonce"],
-            )
-            for row in rows
-        ]
+    def _row_to_authorization(self, row: sqlite3.Row) -> Authorization:
+        return Authorization(
+            id=row["id"],
+            task_id=row["task_id"],
+            profile_id=row["profile_id"],
+            granted=bool(row["granted"]),
+            granted_by=row["granted_by"],
+            explicit=bool(row["explicit"]),
+            plan_hash=row["plan_hash"],
+            step_hash=row["step_hash"],
+            arguments_hash=row["arguments_hash"],
+            expires_at=self._parse_optional_datetime(row["expires_at"]),
+            used_at=self._parse_optional_datetime(row["used_at"]),
+            nonce=row["nonce"],
+        )

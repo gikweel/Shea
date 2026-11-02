@@ -20,6 +20,7 @@ from shea.app.enums import (
 )
 from shea.app.environment import probe_environment
 from shea.app.exceptions import (
+    AuthorizationRejectedError,
     ContractValidationError,
     NoSideEffectError,
     ReceiptRequiredError,
@@ -34,6 +35,7 @@ from shea.app.ports import (
     ReceiptRepository,
     RecoveryRepository,
 )
+from shea.app.ports.authorization import AuthorizationVerifier
 from shea.app.ports.process import AdapterContext
 from shea.app.reconcile.registry import ReconcilerRegistry, default_reconciler_registry
 from shea.app.recovery import (
@@ -99,6 +101,7 @@ class ExecutionSupervisor:
         clock: Clock,
         id_generator: IdGenerator,
         unit_of_work: UnitOfWork,
+        authorization_verifier: AuthorizationVerifier,
         identity_resolver: IdentityResolver | None = None,
         identity_revalidator: IdentityRevalidator | None = None,
         evidence_repository: EvidenceRepository | None = None,
@@ -113,6 +116,7 @@ class ExecutionSupervisor:
         self._clock = clock
         self._ids = id_generator
         self._uow = unit_of_work
+        self._authorization_verifier = authorization_verifier
         self._identity_resolver = identity_resolver or IdentityResolver()
         self._identity_revalidator = identity_revalidator or IdentityRevalidator()
         self._evidence_repo = evidence_repository
@@ -130,6 +134,7 @@ class ExecutionSupervisor:
 
     def execute(self, contract: ExecutionContract) -> SupervisionResult:
         self._validate(contract)
+        self._verify_authorization(contract)
         adapter = self._select_adapter(contract)
 
         idem_key = contract.metadata.get("idempotency_key")
@@ -474,6 +479,21 @@ class ExecutionSupervisor:
                 updated_at=now,
             )
         )
+
+    def _verify_authorization(self, contract: ExecutionContract) -> None:
+        """Independently confirm the contract is covered by a live,
+        matching authorization — before any receipt exists, so a refused
+        contract leaves no execution record and never reaches an adapter.
+
+        Fail closed: if the verifier cannot answer (storage error, a bug),
+        that is a refusal, not a pass. If mandatory security checks cannot
+        be performed, privileged execution must stop."""
+        try:
+            self._authorization_verifier.verify(contract)
+        except Exception as exc:  # noqa: BLE001 — any failure to verify is a refusal
+            raise AuthorizationRejectedError(
+                f"authorization {contract.authorization_id!r} rejected: {exc}"
+            ) from exc
 
     def _validate(self, contract: ExecutionContract) -> None:
         if not contract.contract_id:

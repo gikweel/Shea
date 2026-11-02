@@ -46,6 +46,7 @@ from shea.events.channels import (
     SecurityChannel,
     TaskChannel,
 )
+from shea.execution.authorization import RecordAuthorizationVerifier
 from shea.execution.permit import ExecutionPermitAuthority
 from shea.execution.plan_runner import PlanRunner
 from shea.execution.service import ExecutionService
@@ -342,6 +343,12 @@ def build_runtime(
         clock=clock,
         id_generator=id_generator,
         unit_of_work=unit_of_work,
+        authorization_verifier=RecordAuthorizationVerifier(
+            authorizations=authorization_repository,
+            tasks=task_repository,
+            plans=plan_repository,
+            clock=clock,
+        ),
     )
 
     decision_channel = DecisionChannel(event_bus, clock, id_generator)

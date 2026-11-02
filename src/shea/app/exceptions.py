@@ -32,3 +32,11 @@ class NoSideEffectError(AppPlaneError):
     succeeds, the connection drops, Shea receives no result" is UNKNOWN,
     not failure). Do not raise this after any external effect.
     """
+
+
+class AuthorizationRejectedError(ContractValidationError):
+    """The supervisor's own authorization check refused the contract.
+
+    Raised before any receipt or attempt exists, so a rejected contract
+    leaves no execution record and never reaches an adapter.
+    """
