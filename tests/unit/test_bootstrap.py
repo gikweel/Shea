@@ -366,3 +366,41 @@ def test_conversational_context_window_is_bounded(tmp_path: Path) -> None:
     assert "turn 0" not in last_prompt  # outside the 6-turn window
     assert "turn 1" in last_prompt
     runtime.conn.close()
+
+
+def test_a_task_runs_end_to_end_through_the_real_authorization_verifier(tmp_path: Path) -> None:
+    """Wiring proof: every other supervisor test uses an allow-all double.
+    Here a real task goes decision -> authorization -> contract ->
+    supervisor -> RecordAuthorizationVerifier -> adapter, unmocked."""
+    provider = ScriptedModelProvider()
+    provider.queue_response(
+        ModelResponse(
+            content="",
+            structured_data={"type": "task", "goal": "say ok", "confidence": 1.0},
+        )
+    )
+    provider.queue_response(
+        ModelResponse(
+            content="",
+            structured_data={
+                "steps": [
+                    {
+                        "tool": "system.reply",
+                        "action": "reply",
+                        "arguments": {"message": "ok"},
+                        "description": "reply",
+                    }
+                ]
+            },
+        )
+    )
+    runtime = build_runtime(
+        tmp_path / "shea.db", workspace=tmp_path / "ws", model_provider=provider
+    )
+
+    result = runtime.interaction_service.handle_text("say ok", run=True)
+
+    assert result.error is None, result.error
+    assert result.task is not None
+    assert result.task.state is TaskState.COMPLETED
+    runtime.conn.close()
