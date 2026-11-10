@@ -16,6 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 app = [
     "fastapi",
+    "python-multipart",  # required by the /chat upload route (UploadFile/File)
     "uvicorn",
     "pywebview",
     "click",
@@ -27,6 +28,7 @@ dev = [
     "mypy>=1.10",
     "ruff>=0.6",
     "fastapi",
+    "python-multipart",  # required by the /chat upload route (UploadFile/File)
     "uvicorn",
     "pywebview",
     "click",
