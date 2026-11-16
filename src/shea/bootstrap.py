@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 from collections.abc import Iterable
@@ -27,7 +28,7 @@ from shea.app.recovery import ReconciliationResult
 from shea.app.supervisor import ExecutionSupervisor
 from shea.audit.recorder import AuditRecorder
 from shea.bootstrap_demo import register_demo_intent
-from shea.config.resolver import ConfigResolver
+from shea.config.resolver import ConfigResolver, build_default_resolver
 from shea.contracts.models import Task
 from shea.core.orchestrator import Orchestrator
 from shea.credentials.broker import SheaCredentialBroker
@@ -139,6 +140,7 @@ class SheaRuntime:
     model_settings_service: ModelSettingsService
     memory_extractor: MemoryExtractor
     config_resolver: ConfigResolver
+    filesystem_policy: FilesystemPolicy
 
     def reconcile_app_plane(self) -> list[ReconciliationResult]:
         return self.recovery_service.reconcile_app_plane()
@@ -179,17 +181,54 @@ def _load_dotenv() -> None:
         break
 
 
-def _filesystem_roots(value: Iterable[str] | None, config_resolver: ConfigResolver | None = None) -> frozenset[str]:
-    if value is not None:
-        return frozenset(value)
-    if config_resolver:
-        configured = config_resolver.resolve("SHEA_FILESYSTEM_ROOTS", None)
-    else:
-        configured = os.environ.get("SHEA_FILESYSTEM_ROOTS")
+def _logical_root(value: str) -> str:
+    """Absolute, normalized, *logical* form of a root. `FilesystemPolicy`
+    matches by pure path-string logic (no symlink resolution), so roots are
+    normalized the same way here; a relative root could never match an
+    absolute request path and would silently deny everything."""
+    return os.path.normpath(os.path.abspath(os.path.expanduser(value)))
 
-    if configured:
-        return frozenset(item for item in configured.split(os.pathsep) if item)
-    return frozenset({str(Path.cwd())})
+
+def _resolve_filesystem_roots(
+    explicit: Iterable[str] | None,
+    resolver: ConfigResolver,
+    workspace: Path,
+) -> frozenset[str]:
+    """Which directories the filesystem policy lets Shea touch.
+
+    Precedence, most authoritative first:
+      1. the caller's explicit `filesystem_roots=` (code decided). An
+         explicitly empty collection means "no filesystem access" and is
+         honoured as such — never widened to the workspace.
+      2. `SHEA_FILESYSTEM_ROOTS` from the effective configuration
+         (pathsep-separated string, or a list from a config file).
+      3. the workspace alone — the narrowest useful default. (Not the
+         process cwd: an unset variable must never widen scope.)
+    """
+    if explicit is not None:
+        return frozenset(_logical_root(str(item)) for item in explicit if str(item).strip())
+
+    configured = resolver.resolve("SHEA_FILESYSTEM_ROOTS", None)
+    if isinstance(configured, str):
+        candidates: list[str] = configured.split(os.pathsep)
+    elif isinstance(configured, list | tuple):
+        candidates = []
+        configured_items = cast(list[object] | tuple[object, ...], configured)
+        for item in configured_items:
+            if isinstance(item, str):
+                candidates.append(item)
+    else:
+        candidates = []
+
+    roots = frozenset(_logical_root(item) for item in candidates if item.strip())
+    if roots:
+        return roots
+    if configured not in (None, "", [], ()):
+        logging.getLogger(__name__).warning(
+            "SHEA_FILESYSTEM_ROOTS=%s contained no usable paths; using the workspace only.",
+            repr(cast(object, configured)),
+        )
+    return frozenset({str(workspace)})
 
 
 def build_runtime(
@@ -298,9 +337,12 @@ def build_runtime(
     matcher = DeterministicIntentMatcher()
     templates = PlanTemplateRegistry()
     network_policy = NetworkPolicy()
-    configured_roots = filesystem_roots if filesystem_roots is not None else (str(workspace),)
+    # Effective configuration is built here, in the composition root, and
+    # injected — subsystems never read config files or the environment
+    # themselves. Pass an explicit `ConfigResolver()` to opt out (tests).
+    resolver = config_resolver if config_resolver is not None else build_default_resolver()
     filesystem_policy = FilesystemPolicy(
-        allowed_roots=_filesystem_roots(configured_roots)
+        allowed_roots=_resolve_filesystem_roots(filesystem_roots, resolver, workspace)
     )
     verifier_registry = VerifierRegistry()
     if register_builtins and register_demo_intents:
@@ -561,7 +603,8 @@ def build_runtime(
         model_provider=switchable_provider,
         model_settings_service=model_settings_service,
         memory_extractor=memory_extractor,
-        config_resolver=cast('ConfigResolver', config_resolver),
+        config_resolver=resolver,
+        filesystem_policy=filesystem_policy,
     )
     runtime.reconcile_app_plane()
     runtime.reconcile_stranded_tasks()
