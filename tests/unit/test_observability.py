@@ -1,5 +1,8 @@
 import json
 import logging
+from pathlib import Path
+
+import pytest
 
 from shea.observability.context import active_context, get_correlation_id
 from shea.observability.tracer import configure_tracing
@@ -41,3 +44,45 @@ def test_tracer_json(caplog):
     data = json.loads(out)
     assert data["correlation_id"] == "trace-abc"
     assert data["message"] == "msg"
+
+
+def test_configure_tracing_leaves_the_hosts_own_handlers_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)  # the log file is cwd-relative; keep it out of the repo
+    root = logging.getLogger()
+    foreign = logging.NullHandler()
+    root.addHandler(foreign)
+    try:
+        configure_tracing(logging.INFO)
+        assert foreign in root.handlers
+    finally:
+        root.removeHandler(foreign)
+        _remove_tracing_handlers(root)
+
+
+def test_configure_tracing_is_idempotent_and_closes_the_handler_it_replaces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    root = logging.getLogger()
+    try:
+        configure_tracing(logging.INFO)
+        first = [h for h in root.handlers if getattr(h, "_shea_structured_tracing", False)]
+        assert len(first) == 1
+
+        configure_tracing(logging.INFO)
+        second = [h for h in root.handlers if getattr(h, "_shea_structured_tracing", False)]
+
+        assert len(second) == 1  # replaced, not stacked
+        assert second[0] is not first[0]
+        assert first[0].stream is None  # type: ignore[attr-defined]  # closed: no leaked fd
+    finally:
+        _remove_tracing_handlers(root)
+
+
+def _remove_tracing_handlers(root: logging.Logger) -> None:
+    for handler in root.handlers[:]:
+        if getattr(handler, "_shea_structured_tracing", False):
+            root.removeHandler(handler)
+            handler.close()

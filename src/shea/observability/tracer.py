@@ -34,17 +34,29 @@ class JsonFormatter(logging.Formatter):
             
         return json.dumps(log_obj)
 
+_TRACING_HANDLER_MARK = "_shea_structured_tracing"
+
+
 def configure_tracing(level: int = logging.INFO) -> None:
-    """Initialize the global structured tracer for the application."""
+    """Initialize the global structured tracer for the application.
+
+    Idempotent, and deliberately polite to its host: it manages only the
+    handler it installed itself. Repeated calls replace (and *close*, so no
+    file descriptor leaks) the previous tracing handler rather than stacking
+    duplicates, and handlers belonging to the embedding application — or to a
+    test harness — are left exactly as they were.
+    """
     root_logger = logging.getLogger()
-    
-    # Remove existing handlers to avoid duplicates
-    for handler in root_logger.handlers[:]:
-        root_logger.removeHandler(handler)
-        
+
+    for existing in root_logger.handlers[:]:
+        if getattr(existing, _TRACING_HANDLER_MARK, False):
+            root_logger.removeHandler(existing)
+            existing.close()
+
     handler = logging.FileHandler(".shea_logs.json")
+    setattr(handler, _TRACING_HANDLER_MARK, True)
     handler.setFormatter(JsonFormatter())
     handler.addFilter(StructuredTracer())
-    
+
     root_logger.addHandler(handler)
     root_logger.setLevel(level)

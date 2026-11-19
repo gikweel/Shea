@@ -139,6 +139,17 @@ def task_repository(
     return SqliteTaskRepository(conn, unit_of_work=unit_of_work)
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_config(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
+    """`build_runtime()` now builds the real layered configuration by
+    default (user config, trusted project config, SHEA_* environment). Tests
+    must not depend on the developer's machine, so point the user layer at an
+    empty home and drop the one environment variable configuration reads.
+    Tests that exercise configuration pass an explicit `ConfigResolver`."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path_factory.mktemp("home"))
+    monkeypatch.delenv("SHEA_FILESYSTEM_ROOTS", raising=False)
+
+
 @pytest.fixture
 def plan_repository(
     conn: sqlite3.Connection, unit_of_work: SqliteUnitOfWork
